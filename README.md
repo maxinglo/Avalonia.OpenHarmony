@@ -43,9 +43,10 @@ dotnet run --project samples/Counter/Counter.csproj
    `avaoh_report` imports.
 3. Set the CMake cache variable `AVALONIA_OHOS_APP_LIBRARY` to your NativeAOT shared object filename and include
    `src/Avalonia.OpenHarmony.Native` with `add_subdirectory`. The resulting ArkTS module is
-   `libavalonia_ohos_bridge.so`. Use the sample's N-API declarations and `XComponentController` as a starting point.
-   Call `configureFiles(this.context.filesDir)` before creating the surface so Fontconfig can find HarmonyOS system
-   fonts.
+   `libavalonia_ohos_bridge.so`. Stage the contents of `src/Avalonia.OpenHarmony.ArkTS` into the HAP module's
+   `src/main` directory. Import `AvaloniaSurfaceHost` from `ets/components/AvaloniaSurfaceHost.ets` and give it
+   the area allocated to Avalonia in your ArkUI entry page. Call `configureFiles(this.context.filesDir)` before
+   creating the surface so Fontconfig can find HarmonyOS system fonts.
 4. Include the managed shared object and the graphics libraries prepared by `scripts/PrepareOpenHarmonyGraphics.ps1` in
    `entry/libs/<abi>`. Include the applicable licensing files for the backend, runtime, SDK C++ library and graphics
    dependencies in the packaged resources.
@@ -54,6 +55,19 @@ dotnet run --project samples/Counter/Counter.csproj
 are queued to that dispatcher. The frame callback receives a premultiplied RGBA8888 framebuffer whose address remains
 valid for the duration of the callback. Surface IDs remain strings in ArkTS, and C++ assigns independent monotonic
 identifiers to surface instances. Touch coordinates sent to the C# host are physical pixels.
+
+### System services
+
+Register the window's ArkTS system request handler with `registerSystemRequests(this.context)` before loading the
+surface page. The handler is provided in `ets/services/SystemRequests.ets`. Unregister it during window-stage
+destruction so pending requests complete. Pass an `OpenHarmonyLauncher` and an `OpenHarmonyStorageProvider` to
+`OpenHarmonyHost` using `OpenHarmonySystemRequests.RequestAsync`. The providers offer HTTP(S) links, file associations,
+and the system document picker. A picked file retains its original authorization URI. The bridge transfers an owned
+duplicate of a descriptor to managed code for file and directory operations. [Storage details](docs/storage.md)
+
+Apps can host the HarmonyOS security `PasteButton` alongside the surface. In its success callback, call
+`bridge.requestPaste()`. The target NativeAOT library can implement `avaoh_paste` and forward it to
+`OpenHarmonyHost.PasteToFocusedTextBox()`. [Clipboard details](docs/clipboard.md)
 
 ### System input method
 

@@ -68,7 +68,10 @@ foreach ($export in $counterExports) {
 }
 
 Copy-Item -Path (Join-Path $sample 'Hap/*') -Destination $hap -Recurse -Force
-$cpp = Join-Path $hap 'entry/src/main/cpp'
+$entry = Join-Path $hap 'entry/src/main'
+$arktsSource = Join-Path $repository 'src/Avalonia.OpenHarmony.ArkTS'
+Copy-Item -Path (Join-Path $arktsSource '*') -Destination $entry -Recurse -Force
+$cpp = Join-Path $entry 'cpp'
 $nativeSource = Join-Path $repository 'src/Avalonia.OpenHarmony.Native'
 Copy-Item -Path (Join-Path $nativeSource '*') -Destination $cpp -Force
 $moduleProfilePath = Join-Path $hap 'entry/build-profile.json5'
