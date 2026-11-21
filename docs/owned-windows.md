@@ -51,7 +51,7 @@ child window ID reported by WindowManager. The keyboard opened while that window
 Insets observation currently follows the stage window. In the accessibility-enabled
 HAP, both open surfaces registered successfully under ScreenReader. Activating the
 main button through ScreenReader incremented its counter. An API 26 x86_64 experiment
-then verified activation in a moved child window. A single touch focused the child
+then verified activation in a moved child window. The same result was reproduced with the production bridge. A single touch focused the child
 counter button. Double-touching a blank area invoked that button and changed the
 child count to 1.
 
