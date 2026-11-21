@@ -250,16 +250,26 @@ napi_value SetAvoidArea(napi_env env, napi_callback_info info)
     size_t count = 2;
     napi_value args[2];
     int32_t kind;
-    napi_typedarray_type type;
-    size_t length = 0;
-    void* data = nullptr;
+    bool isArray = false;
+    uint32_t length = 0;
+    int32_t rects[16];
     if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 2 ||
         napi_get_value_int32(env, args[0], &kind) != napi_ok || kind < 0 || kind == 2 || kind > 5 ||
-        napi_get_typedarray_info(env, args[1], &type, &length, &data, nullptr, nullptr) != napi_ok ||
-        type != napi_int32_array || length != 16 || data == nullptr)
-        return Error(env, "Expected an avoidance type and four pixel rectangles.");
+        napi_is_array(env, args[1], &isArray) != napi_ok || !isArray ||
+        napi_get_array_length(env, args[1], &length) != napi_ok || length != 16) {
+        OH_LOG_Print(LOG_APP, LOG_WARN, LogDomain, Tag, "Ignored a malformed window avoidance area");
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < length; ++i) {
+        napi_value element;
+        if (napi_get_element(env, args[1], i, &element) != napi_ok ||
+            napi_get_value_int32(env, element, &rects[i]) != napi_ok) {
+            OH_LOG_Print(LOG_APP, LOG_WARN, LogDomain, Tag, "Ignored a malformed window avoidance coordinate");
+            return nullptr;
+        }
+    }
     if (auto callback = App().setAvoidArea; callback != nullptr)
-        callback(kind, static_cast<const int32_t*>(data));
+        callback(kind, rects);
     return nullptr;
 }
 

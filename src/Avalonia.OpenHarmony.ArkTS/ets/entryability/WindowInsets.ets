@@ -12,12 +12,12 @@ function publishArea(kind: window.AvoidAreaType, area: window.AvoidArea): void {
     kind === window.AvoidAreaType.TYPE_SYSTEM_GESTURE) {
     return;
   }
-  const rects = new Int32Array([
+  const rects: number[] = [
     area.leftRect.left, area.leftRect.top, area.leftRect.width, area.leftRect.height,
     area.topRect.left, area.topRect.top, area.topRect.width, area.topRect.height,
     area.rightRect.left, area.rightRect.top, area.rightRect.width, area.rightRect.height,
     area.bottomRect.left, area.bottomRect.top, area.bottomRect.width, area.bottomRect.height
-  ]);
+  ];
   // HarmonyOS defines the rectangles as the authoritative avoidance geometry.
   bridge.setAvoidArea(kind, rects);
 }
