@@ -12,6 +12,7 @@
 #include <poll.h>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <unistd.h>
 #include <hilog/log.h>
 #include <napi/native_api.h>
@@ -135,6 +136,26 @@ void ReportClosedSurface(int32_t windowKey, int64_t token)
         App().destroy(token);
     else if (auto close = App().closeChildSurface)
         close(windowKey, token);
+}
+
+void RetireWindowSurfaces(int32_t windowKey)
+{
+    std::vector<std::pair<int32_t, int64_t>> retired;
+    {
+        std::lock_guard lock(surfaceMutex);
+        if (windowKey == MainWindow) {
+            for (auto entry = surfaces.begin(); entry != surfaces.end();) {
+                const auto current = entry++;
+                retired.emplace_back(current->first, current->second.token);
+                RemoveSurface(current);
+            }
+        } else if (const auto entry = surfaces.find(windowKey); entry != surfaces.end()) {
+            retired.emplace_back(entry->first, entry->second.token);
+            RemoveSurface(entry);
+        }
+    }
+    for (const auto& item : retired)
+        ReportClosedSurface(item.first, item.second);
 }
 
 bool ParseSurfaceId(napi_env env, napi_value value, uint64_t& surfaceId)
@@ -350,9 +371,11 @@ napi_value ReportChildEvent(napi_env env, napi_callback_info info)
     int32_t windowKey, event;
     if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 2 ||
         napi_get_value_int32(env, args[0], &windowKey) != napi_ok || windowKey < MainWindow ||
-        napi_get_value_int32(env, args[1], &event) != napi_ok || event < 0 || event > 4 ||
-        (windowKey == MainWindow && event != 4))
+        napi_get_value_int32(env, args[1], &event) != napi_ok || event < 0 || event > 6 ||
+        (windowKey == MainWindow ? (event != 4 && event != 5) : event == 5))
         return Error(env, "Expected a child window key and a lifecycle event.");
+    if (event == 4)
+        RetireWindowSurfaces(windowKey);
     if (auto callback = App().reportChildEvent)
         callback(windowKey, event);
     return nullptr;

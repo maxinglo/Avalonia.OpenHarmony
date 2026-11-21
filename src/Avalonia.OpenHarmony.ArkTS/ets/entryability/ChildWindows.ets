@@ -8,7 +8,9 @@ enum ChildEvent {
   Hidden,
   Focused,
   Unfocused,
-  Destroyed
+  Destroyed,
+  StageCreated,
+  ModalityReleased
 }
 
 interface WindowRequest {
@@ -26,34 +28,45 @@ interface WindowRequest {
 
 export const childWindowPage: string = 'pages/AvaloniaChildWindow';
 
+export function reportStageDestroyed(): void {
+  bridge.reportChildEvent(0, ChildEvent.Destroyed);
+}
+
 export class ChildWindows {
   private stage: window.WindowStage;
   private main: window.Window;
   private enableAccessibility: boolean;
   private windows: Map<number, window.Window> = new Map();
+  private closing: Map<number, Promise<boolean>> = new Map();
+  private modalWindows: Set<number> = new Set();
   private active: boolean = true;
 
   constructor(stage: window.WindowStage, main: window.Window, enableAccessibility: boolean) {
     this.stage = stage;
     this.main = main;
     this.enableAccessibility = enableAccessibility;
+    bridge.reportChildEvent(0, ChildEvent.StageCreated);
   }
 
   stop(): void {
     this.active = false;
-    this.windows.clear();
-    bridge.reportChildEvent(0, ChildEvent.Destroyed);
+    for (const key of this.windows.keys()) {
+      this.close(key);
+    }
   }
 
   async execute(argument: string): Promise<string | null> {
-    if (!this.active) {
-      return null;
-    }
     const request = JSON.parse(argument) as WindowRequest;
     if (!Number.isInteger(request.id) || request.id <= 0) {
       return null;
     }
 
+    if (request.operation === 'close') {
+      return await this.close(request.id) ? '' : null;
+    }
+    if (!this.active || this.closing.has(request.id)) {
+      return null;
+    }
     const child = this.windows.get(request.id);
     if (request.operation === 'show') {
       return await this.show(request, child) ? '' : null;
@@ -65,10 +78,6 @@ export class ChildWindows {
       case 'hide':
         await child.minimize();
         this.publishEvent(request.id, child, ChildEvent.Hidden);
-        break;
-      case 'close':
-        await child.destroyWindow();
-        this.closed(request.id, child);
         break;
       case 'activate':
         await child.raiseToAppTop();
@@ -113,7 +122,7 @@ export class ChildWindows {
       width,
       height
     };
-    const name = 'AvaloniaChild' + key;
+    const name = this.windowName(key);
     const options: window.SubWindowOptions = {
       title: request.title || 'Avalonia child window',
       windowRect: rect,
@@ -122,24 +131,26 @@ export class ChildWindows {
     if (request.modal) {
       options.isModal = true;
       options.modalityType = window.ModalityType.WINDOW_MODALITY;
+      this.modalWindows.add(key);
     }
 
     let child: window.Window | undefined;
     try {
       child = await this.createWindow(name, options);
+      this.windows.set(key, child);
+      this.observe(key, child);
       if (!this.active) {
-        await child.destroyWindow();
+        await this.close(key);
         return false;
       }
 
-      this.windows.set(key, child);
-      this.observe(key, child);
       this.publishFrame(key, child);
       const storage = new LocalStorage();
       storage.setOrCreate<number>('avaloniaChildWindowKey', key);
       storage.setOrCreate<boolean>('avaloniaChildAccessibility', this.enableAccessibility);
       await child.loadContent(childWindowPage, storage);
       if (!this.active || this.windows.get(key) !== child) {
+        await this.close(key);
         return false;
       }
       await this.showWindow(child, request.activate);
@@ -149,16 +160,87 @@ export class ChildWindows {
     } catch (error) {
       const failure = error as Error;
       hilog.warn(0x0202, 'AvaloniaOHOS', 'Child window %{public}d show failed: %{public}s', key, failure.message);
-      if (child !== undefined) {
-        try {
-          await child.destroyWindow();
-        } catch (_) {
-          // The stage or the window may already have been destroyed.
-        }
-        this.closed(key, child);
-      }
+      await this.close(key);
       return false;
     }
+  }
+
+  private close(key: number): Promise<boolean> {
+    const current = this.closing.get(key);
+    if (current !== undefined) {
+      return current;
+    }
+    const pending = this.destroyChild(key).finally((): void => {
+      this.closing.delete(key);
+    });
+    this.closing.set(key, pending);
+    return pending;
+  }
+
+  private async destroyChild(key: number): Promise<boolean> {
+    let child = this.windows.get(key);
+    if (child === undefined) {
+      try {
+        child = window.findWindow(this.windowName(key));
+        this.windows.set(key, child);
+      } catch (error) {
+        if ((error as BusinessError).code === 1300002) {
+          this.modalWindows.delete(key);
+          bridge.reportChildEvent(key, ChildEvent.Destroyed);
+          return true;
+        }
+        this.warnClose(key, 'window lookup', error as Error);
+        return false;
+      }
+    }
+
+    try {
+      await child.destroyWindow();
+    } catch (error) {
+      if (this.windows.get(key) !== child || this.isWindowMissing(key)) {
+        this.closed(key, child);
+        return true;
+      }
+      this.warnClose(key, 'destroy', error as Error);
+      if (this.modalWindows.has(key)) {
+        try {
+          await child.setSubWindowModal(false);
+          this.modalWindows.delete(key);
+          this.publishEvent(key, child, ChildEvent.ModalityReleased);
+        } catch (modalError) {
+          this.warnClose(key, 'release modality', modalError as Error);
+        }
+      }
+      try {
+        await child.minimize();
+        if (!child.isWindowShowing()) {
+          this.publishEvent(key, child, ChildEvent.Hidden);
+        }
+      } catch (hideError) {
+        this.warnClose(key, 'hide', hideError as Error);
+      }
+      return this.windows.get(key) !== child;
+    }
+    this.closed(key, child);
+    return true;
+  }
+
+  private isWindowMissing(key: number): boolean {
+    try {
+      window.findWindow(this.windowName(key));
+      return false;
+    } catch (error) {
+      return (error as BusinessError).code === 1300002;
+    }
+  }
+
+  private windowName(key: number): string {
+    return 'AvaloniaChild' + key;
+  }
+
+  private warnClose(key: number, operation: string, error: Error): void {
+    hilog.warn(0x0202, 'AvaloniaOHOS', 'Child window %{public}d %{public}s failed: %{public}s',
+      key, operation, error.message);
   }
 
   private async createWindow(name: string, options: window.SubWindowOptions): Promise<window.Window> {
@@ -250,6 +332,7 @@ export class ChildWindows {
   private closed(key: number, child: window.Window): void {
     if (this.windows.get(key) === child) {
       this.windows.delete(key);
+      this.modalWindows.delete(key);
       bridge.reportChildEvent(key, ChildEvent.Destroyed);
     }
   }

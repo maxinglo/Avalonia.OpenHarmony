@@ -3,6 +3,7 @@ import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import bridge from 'libavalonia_ohos_bridge.so';
 import { registerSystemRequests } from '../services/SystemRequests';
+import { reportStageDestroyed } from './ChildWindows';
 import { HostLifecycle, PlatformWindow, updateTheme } from './PlatformWindow';
 
 export default class EntryAbility extends UIAbility {
@@ -40,6 +41,10 @@ export default class EntryAbility extends UIAbility {
     this.configured = false;
     this.stopSystemRequests?.();
     this.stopSystemRequests = undefined;
+  }
+
+  onWindowStageDestroy(): void {
+    reportStageDestroyed();
   }
 
   onForeground(): void {
