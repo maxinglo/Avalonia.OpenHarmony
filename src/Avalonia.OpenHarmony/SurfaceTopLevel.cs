@@ -24,6 +24,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     private readonly OpenHarmonyCursorController? _cursorController;
     private readonly OpenHarmonyScreens _screens;
     private readonly OpenHarmonyNavigationManager _navigation = new();
+    private readonly OpenHarmonyEgl.Window? _eglWindow;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private IInputRoot? _inputRoot;
     private PixelSize _pixelSize;
@@ -31,7 +32,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
 
     public SurfaceTopLevel(long surface, Compositor compositor, OpenHarmonyHost.PresentFrame present,
         Func<int>? getInputWindowId, Action<string> reportError, OpenHarmonyScreens screens,
-        ILauncher? launcher, IStorageProvider? storageProvider)
+        ILauncher? launcher, IStorageProvider? storageProvider, OpenHarmonyEgl.Window? eglWindow)
     {
         Surface = surface;
         Compositor = compositor;
@@ -39,17 +40,20 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         _launcher = launcher;
         _storageProvider = storageProvider;
         _screens = screens;
+        _eglWindow = eglWindow;
         if (getInputWindowId is not null)
         {
             _textInput = new(this, getInputWindowId, reportError);
             _cursorController = new(getInputWindowId);
         }
-        Surfaces = [this];
+        Surfaces = eglWindow is null ? [this] : [eglWindow];
     }
 
     public long Surface { get; }
     public Compositor Compositor { get; }
     public IPlatformRenderSurface[] Surfaces { get; }
+    public bool UsesEgl => _eglWindow is not null;
+    public PixelSize PixelSize => _pixelSize;
     public Size ClientSize => new(_pixelSize.Width / RenderScaling, _pixelSize.Height / RenderScaling);
     public double RenderScaling { get; private set; } = 1;
     public double DesktopScaling => RenderScaling;
@@ -72,13 +76,14 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         var size = new PixelSize(width, height);
         if (_pixelSize == size && RenderScaling == scaling)
             return;
-        if (_pixelSize != size)
+        if (_pixelSize != size && _eglWindow is null)
         {
             var newBuffer = (IntPtr)NativeMemory.AllocZeroed(checked((nuint)width * (nuint)height * 4));
             NativeMemory.Free((void*)_pixels);
             _pixels = newBuffer;
-            _pixelSize = size;
         }
+        _pixelSize = size;
+        _eglWindow?.Resize(size, scaling);
         if (RenderScaling != scaling)
         {
             RenderScaling = scaling;
@@ -161,6 +166,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     public void Dispose()
     {
         _textInput?.SetClient(null);
+        _eglWindow?.Dispose();
         NativeMemory.Free((void*)_pixels);
         _pixels = IntPtr.Zero;
         _touch.Dispose();

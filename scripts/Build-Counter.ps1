@@ -8,7 +8,8 @@ param(
     [string]$NuGetRoot,
     [string]$HvigorHome,
     [string]$OhPmHome,
-    [switch]$StageOnly
+    [switch]$StageOnly,
+    [switch]$UseEgl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,7 +30,9 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $runtimeCommit) {
 }
 
 $rid, $machine = if ($Abi -eq 'x86_64') { 'linux-musl-x64', 'X86-64' } else { 'linux-musl-arm64', 'AArch64' }
-$build = Join-Path $repository "artifacts/build/$Abi"
+$renderingSuffix = if ($UseEgl) { '/egl' } else { '' }
+$useEglValue = $UseEgl.IsPresent.ToString().ToLowerInvariant()
+$build = Join-Path $repository "artifacts/build/$Abi$renderingSuffix"
 $managed = Join-Path $build 'managed'
 $hap = Join-Path $build 'Hap'
 if (!$NuGetRoot) { $NuGetRoot = Join-Path $repository 'artifacts/cache/nuget' }
@@ -42,7 +45,7 @@ $sample = Join-Path $repository 'samples/Counter'
 Push-Location $repository
 try {
     & dotnet publish (Join-Path $sample 'Counter.csproj') -c Release -r $rid -o $managed `
-        '-p:OpenHarmonyBuild=true' '-p:OpenHarmonyApiLevel=26' "-p:OpenHarmonyAbi=$Abi" `
+        '-p:OpenHarmonyBuild=true' '-p:OpenHarmonyApiLevel=26' "-p:OpenHarmonyAbi=$Abi" "-p:AvaloniaUseEgl=$useEglValue" `
         "-p:OpenHarmonyNetRoot=$OpenHarmonyNetRoot" "-p:OpenHarmonySdkRoot=$sdk" "-p:OpenHarmonyNativeRoot=$native" `
         "-p:ArtifactsPath=$build/dotnet" "-p:RestorePackagesPath=$NuGetRoot" -m:1 -nr:false
     if ($LASTEXITCODE -ne 0) { throw 'The Counter NativeAOT publish failed.' }
@@ -60,6 +63,7 @@ if ($LASTEXITCODE -ne 0 -or $symbols -notmatch "Machine:.*$machine") {
 }
 $counterExports = @(
     'avaoh_resize', 'avaoh_destroy', 'avaoh_touch',
+    'avaoh_key', 'avaoh_pointer', 'avaoh_input_blur', 'avaoh_paste',
     'avaoh_set_lifecycle', 'avaoh_set_theme', 'avaoh_set_displays', 'avaoh_set_window_position',
     'avaoh_set_surface_offset', 'avaoh_request_back'
 )
@@ -187,7 +191,7 @@ try {
     $archive.Dispose()
 }
 
-$packageDirectory = Join-Path $repository "artifacts/packages/$Abi/$BuildMode"
+$packageDirectory = Join-Path $repository "artifacts/packages/$Abi/$BuildMode$renderingSuffix"
 New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
 $package = Join-Path $packageDirectory 'AvaloniaCounter-unsigned.hap'
 Copy-Item -LiteralPath $builtHap -Destination $package -Force

@@ -8,6 +8,7 @@
     <PublishAot Condition="'$(OpenHarmonyBuild)' == 'true'">true</PublishAot>
     <InvariantGlobalization Condition="'$(OpenHarmonyBuild)' == 'true'">true</InvariantGlobalization>
     <DefineConstants Condition="'$(OpenHarmonyBuild)' == 'true'">$(DefineConstants);OHOS</DefineConstants>
+    <DefineConstants Condition="'$(AvaloniaUseEgl)' == 'true'">$(DefineConstants);OHOS_COUNTER_EGL</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Avalonia.OpenHarmony/Avalonia.OpenHarmony.csproj"/>

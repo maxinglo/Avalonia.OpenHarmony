@@ -142,3 +142,15 @@ the Avalonia IME bridge are separate device checks.
 Develop features and fixes on separate branches and review them in pull requests to main. Promote selected main commits
 to preview in a release pull request. Update stable after preview validation. Use a hotfix branch for urgent stable
 fixes and bring the fix back to main.
+
+# Skia EGL rendering
+
+The software framebuffer is the default. An application can opt in to the Skia OpenGL ES renderer
+by adding `With(new OpenHarmonyRenderingOptions { UseEgl = true })` to its `AppBuilder`.
+The host checks that Skia can draw into the live XComponent window before starting the GPU
+compositor. EGL initialization or rendering errors return the affected top level to software.
+
+Run `scripts/Build-Counter.ps1` with `-UseEgl` to enable the same request. The package is placed in the
+`egl` subdirectory of the chosen ABI and build mode.
+On HarmonyOS, the first compositor frame on each EGL surface produces a
+`Presented Avalonia EGL frame` entry under the `AvaloniaOHOS` log tag.

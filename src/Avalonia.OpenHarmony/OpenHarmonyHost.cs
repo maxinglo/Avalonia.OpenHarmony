@@ -31,6 +31,9 @@ public sealed partial class OpenHarmonyHost
     private bool _stopped;
     private EmbeddableControlRoot? _root;
     private SurfaceTopLevel? _topLevel;
+    private OpenHarmonyEgl? _egl;
+    private Compositor? _eglCompositor;
+    private bool _eglUnavailable;
 
     public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError)
         : this(configure, present, reportError, null)
@@ -93,27 +96,69 @@ public sealed partial class OpenHarmonyHost
                     return;
 
                 CloseSurface();
-                var compositor = AvaloniaLocator.Current.GetRequiredService<Compositor>();
-                _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError,
-                    _screens, _launcher, _storageProvider);
-                try
-                {
-                    _topLevel.Resize(width, height, scaling);
-                    _root = new EmbeddableControlRoot(_topLevel);
-                    _root.Content = _lifetime.MainView;
-                    _root.Prepare();
-                    UpdateSurfaceOrigin();
-                    RefreshRendering();
-                }
-                catch
-                {
-                    CloseSurface();
-                    throw;
-                }
+                OpenSurface(surface, width, height, scaling);
                 return;
             }
             _topLevel.Resize(width, height, scaling);
         });
+
+    private void OpenSurface(long surface, int width, int height, double scaling)
+    {
+        var compositor = AvaloniaLocator.Current.GetRequiredService<Compositor>();
+        OpenHarmonyEgl.Window? eglWindow = null;
+        if (!_eglUnavailable && AvaloniaLocator.Current.GetService<OpenHarmonyRenderingOptions>()?.UseEgl == true)
+        {
+            try
+            {
+                _egl ??= new OpenHarmonyEgl();
+                eglWindow = _egl.AcquireWindow(surface, new PixelSize(width, height), scaling,
+                    error => Post(() => FallBackToSoftware(surface, error)));
+                compositor = _eglCompositor ??= new Compositor(_egl.Graphics);
+            }
+            catch (Exception error)
+            {
+                eglWindow?.Dispose();
+                eglWindow = null;
+                ReportSoftwareFallback(error);
+            }
+        }
+
+        try
+        {
+            _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError,
+                _screens, _launcher, _storageProvider, eglWindow);
+            _topLevel.Resize(width, height, scaling);
+            _root = new EmbeddableControlRoot(_topLevel);
+            _root.Content = _lifetime.MainView;
+            _root.Prepare();
+            UpdateSurfaceOrigin();
+            RefreshRendering();
+        }
+        catch
+        {
+            CloseSurface();
+            eglWindow?.Dispose();
+            throw;
+        }
+    }
+
+    private void FallBackToSoftware(long surface, Exception error)
+    {
+        if (_topLevel is not { UsesEgl: true } topLevel || topLevel.Surface != surface)
+            return;
+
+        ReportSoftwareFallback(error);
+        var size = topLevel.PixelSize;
+        var scaling = topLevel.RenderScaling;
+        CloseSurface();
+        OpenSurface(surface, size.Width, size.Height, scaling);
+    }
+
+    private void ReportSoftwareFallback(Exception error)
+    {
+        _eglUnavailable = true;
+        _reportError($"OpenHarmony EGL initialization or rendering failed. Using software: {error.Message}");
+    }
 
     public void DestroySurface(long surface) =>
         Post(() =>
@@ -235,6 +280,7 @@ public sealed partial class OpenHarmonyHost
         locator.Bind<ICursorFactory>().ToSingleton<CursorFactory>();
         locator.Bind<IRenderLoop>().ToConstant(RenderLoop.FromTimer(new UiThreadRenderTimer(60)));
         locator.Bind<IWindowingPlatform>().ToConstant(new WindowingPlatform(this));
+        locator.Bind<IPlatformGraphics?>().ToFunc(() => _topLevel is { UsesEgl: true } ? _egl?.Graphics : null);
         locator.Bind<Compositor>().ToConstant(new Compositor(null));
     }
 

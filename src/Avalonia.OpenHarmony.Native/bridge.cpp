@@ -77,6 +77,8 @@ struct Surface {
     int32_t height = 0;
     bool reported = false;
     bool warned = false;
+    bool eglUsage = false;
+    unsigned eglReferences = 0;
 };
 
 std::mutex surfaceMutex;
@@ -480,13 +482,48 @@ extern "C" __attribute__((constructor)) void RegisterAvaloniaOpenHarmony()
     napi_module_register(&module);
 }
 
+extern "C" OHNativeWindow* avaoh_acquire_egl_window(int64_t token)
+{
+    std::lock_guard lock(surfaceMutex);
+    if (!surface.window || surface.token != token ||
+        OH_NativeWindow_NativeObjectReference(surface.window) != 0)
+        return nullptr;
+    const int status = OH_NativeWindow_NativeWindowHandleOpt(surface.window, SET_USAGE,
+        static_cast<uint64_t>(NATIVEBUFFER_USAGE_HW_RENDER | NATIVEBUFFER_USAGE_HW_TEXTURE | NATIVEBUFFER_USAGE_MEM_DMA));
+    if (status != 0) {
+        OH_NativeWindow_NativeObjectUnreference(surface.window);
+        return nullptr;
+    }
+    surface.eglUsage = true;
+    ++surface.eglReferences;
+    return surface.window;
+}
+
+extern "C" void avaoh_release_egl_window(OHNativeWindow* window)
+{
+    std::lock_guard lock(surfaceMutex);
+    if (surface.window == window && surface.eglReferences != 0)
+        --surface.eglReferences;
+    OH_NativeWindow_NativeObjectUnreference(window);
+}
+
 extern "C" void avaoh_present(int64_t token, const char* pixels, int32_t width, int32_t height, int32_t rowBytes)
 {
     if (!pixels || width <= 0 || width > INT32_MAX / 4 || height <= 0 || rowBytes < width * 4)
         return;
     std::lock_guard lock(surfaceMutex);
-    if (surface.window == nullptr || surface.token != token || surface.width != width || surface.height != height)
+    if (surface.window == nullptr || surface.token != token || surface.width != width || surface.height != height ||
+        surface.eglReferences != 0)
         return;
+    if (surface.eglUsage) {
+        const int status = OH_NativeWindow_NativeWindowHandleOpt(surface.window, SET_USAGE,
+            static_cast<uint64_t>(NATIVEBUFFER_USAGE_CPU_WRITE | NATIVEBUFFER_USAGE_MEM_DMA));
+        if (status != 0) {
+            WarnFrame("restore CPU usage", status);
+            return;
+        }
+        surface.eglUsage = false;
+    }
     OHNativeWindowBuffer* buffer = nullptr;
     int fence = -1;
     int status = OH_NativeWindow_NativeWindowRequestBuffer(surface.window, &buffer, &fence);

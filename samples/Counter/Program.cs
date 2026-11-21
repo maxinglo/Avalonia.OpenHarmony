@@ -10,11 +10,20 @@ namespace Counter;
 
 public static partial class Program
 {
+    private static AppBuilder ConfigureApp()
+    {
+        var builder = AppBuilder.Configure<CounterApp>();
+#if OHOS_COUNTER_EGL
+        builder.With(new OpenHarmonyRenderingOptions { UseEgl = true });
+#endif
+        return builder;
+    }
+
 #if OHOS
     private static readonly Lazy<OpenHarmonyHost> Host = new(() =>
     {
         CounterApp.Trace = Report;
-        return new OpenHarmonyHost(AppBuilder.Configure<CounterApp>, Present, Report, GetInputWindowId, _initialTheme,
+        return new OpenHarmonyHost(ConfigureApp, Present, Report, GetInputWindowId, _initialTheme,
             new OpenHarmonyLauncher(OpenHarmonySystemRequests.RequestAsync),
             new OpenHarmonyStorageProvider(OpenHarmonySystemRequests.RequestAsync, CanPickFolders() != 0));
     });
@@ -93,7 +102,7 @@ public static partial class Program
             launchRequests++;
             return Task.FromResult(new OpenHarmonySystemResult(string.Empty, null));
         });
-        var host = new OpenHarmonyHost(AppBuilder.Configure<CounterApp>,
+        var host = new OpenHarmonyHost(ConfigureApp,
             (_, pixels, width, height, rowBytes) =>
             {
                 if (pixels != IntPtr.Zero && width == 480 && height == 300 && rowBytes == 1920)
