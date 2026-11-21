@@ -67,3 +67,8 @@ the SDK setter result. `IME preview set` reports the UTF-16 length, requested ra
 `IME preview finish` reports the pending preedit length and range when processed by the dispatcher.
 `IME commit` and Counter's `Text length` record accepted text edits. The preview diagnostics never
 report text contents, and sensitive fields skip preview and text length logging.
+
+A follow-up on the same API 26 x86_64 emulator recorded one successful preview support
+configuration with `supported=True`. Selecting 奴 after the Xiaoyi soft-key sequence `nu`
+then caused one `InsertText` commit and a TextBox length of one. The same Counter process
+recorded zero `SetPreviewText` or `FinishTextPreview` callbacks for that input.
