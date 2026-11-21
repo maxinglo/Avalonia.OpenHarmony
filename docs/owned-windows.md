@@ -53,6 +53,11 @@ HAP, both open surfaces registered successfully under ScreenReader. Activating t
 main button through ScreenReader incremented its counter. Child activation still
 needs a separate device check.
 
+The final close-fix HAP repeated the normal modal and modeless flows. The modal child
+presented its own frame, ignored owner touches, accepted one child tap, and returned 1.
+The owner accepted another tap after the modal close. The modeless child then opened,
+closed, and left the owner interactive.
+
 ## Window closure
 
 A child stops accepting input as soon as its managed window requests closure. The
@@ -65,7 +70,10 @@ that same stage from reopening during a surface resize. A new WindowStage starts
 new managed owner.
 
 The closure regression probes cover failed show cleanup, repeated destroy rejection,
-retry, fallback hide and modality, and destruction during a stage change. Run the
+retry, fallback hide and modality, and destruction during a stage change. The Windows
+Avalonia probe also exercises stale ScreenReader actions during modality. These failure
+paths were verified by injection. The emulator smoke test used normal window closure.
+Run the
 ArkTS service probe with the TypeScript compiler supplied by the DevEco API 26 SDK.
 
 ```powershell
