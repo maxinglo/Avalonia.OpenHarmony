@@ -7,6 +7,7 @@ import { HostLifecycle, PlatformWindow, updateTheme } from './PlatformWindow';
 
 export default class EntryAbility extends UIAbility {
   private platformWindow: PlatformWindow | undefined = undefined;
+  private stopSystemRequests: (() => void) | undefined = undefined;
   private foreground: boolean | undefined = undefined;
   private configured: boolean = false;
 
@@ -15,7 +16,7 @@ export default class EntryAbility extends UIAbility {
       bridge.configureFiles(this.context.filesDir);
       const mainWindow = windowStage.getMainWindowSync();
       bridge.configureInputMethod(mainWindow.getWindowProperties().id);
-      registerSystemRequests(this.context);
+      this.stopSystemRequests = registerSystemRequests(this.context, mainWindow);
       updateTheme(this.context.config);
       this.configured = true;
       if (this.foreground !== undefined) {
@@ -37,7 +38,8 @@ export default class EntryAbility extends UIAbility {
     this.platformWindow?.stop();
     this.platformWindow = undefined;
     this.configured = false;
-    bridge.unregisterSystemRequests();
+    this.stopSystemRequests?.();
+    this.stopSystemRequests = undefined;
   }
 
   onForeground(): void {

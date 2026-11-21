@@ -2,20 +2,32 @@ import { common, Want, wantConstant } from '@kit.AbilityKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { fileUri } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { window } from '@kit.ArkUI';
 import bridge from 'libavalonia_ohos_bridge.so';
 import { executeStorageRequest, supportsFolderPicker } from './StorageRequests';
+import { WindowInsetsRequests } from '../entryability/WindowInsets';
 
-export function registerSystemRequests(context: common.UIAbilityContext): void {
+export function registerSystemRequests(context: common.UIAbilityContext, mainWindow?: window.Window): () => void {
+  const windowInsets = mainWindow === undefined ? undefined : new WindowInsetsRequests(mainWindow);
   bridge.registerSystemRequests((id: bigint, operation: string, argument: string): void => {
     const finish = (value: string | null, fd?: number): void => bridge.completeSystemRequest(id, value, fd);
-    const request: Promise<void> = operation.startsWith('storage.')
-      ? executeStorageRequest(context, operation, argument, finish)
-      : executeLauncherRequest(context, operation, argument).then((value: string | null): void => finish(value));
+    let request: Promise<void>;
+    if (operation.startsWith('storage.')) {
+      request = executeStorageRequest(context, operation, argument, finish);
+    } else if (operation.startsWith('window.') && windowInsets !== undefined) {
+      request = windowInsets.execute(operation, argument).then((value: string | null): void => finish(value));
+    } else {
+      request = executeLauncherRequest(context, operation, argument).then((value: string | null): void => finish(value));
+    }
     request.catch((_error: Error): void => {
       hilog.warn(0x0202, 'AvaloniaOHOS', 'System request %{public}s failed', operation);
       finish(null);
     });
   }, supportsFolderPicker());
+  return (): void => {
+    windowInsets?.stop();
+    bridge.unregisterSystemRequests();
+  };
 }
 
 async function executeLauncherRequest(context: common.UIAbilityContext, operation: string,

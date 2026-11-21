@@ -24,9 +24,11 @@ public static partial class Program
     private static readonly Lazy<OpenHarmonyHost> Host = new(() =>
     {
         CounterApp.Trace = Report;
-        return new OpenHarmonyHost(ConfigureApp, Present, Report, GetInputWindowId, _initialTheme,
+        var host = new OpenHarmonyHost(ConfigureApp, Present, Report, GetInputWindowId, _initialTheme,
             new OpenHarmonyLauncher(OpenHarmonySystemRequests.RequestAsync),
             new OpenHarmonyStorageProvider(OpenHarmonySystemRequests.RequestAsync, CanPickFolders() != 0));
+        host.UseInsetsCommands(OpenHarmonySystemRequests.RequestAsync);
+        return host;
     });
 
     [UnmanagedCallersOnly(EntryPoint = "avaoh_resize")]

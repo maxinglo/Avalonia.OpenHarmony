@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
+using Avalonia.Controls.Platform;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Input.Raw;
@@ -55,6 +56,8 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     public bool UsesEgl => _eglWindow is not null;
     public PixelSize PixelSize => _pixelSize;
     public Size ClientSize => new(_pixelSize.Width / RenderScaling, _pixelSize.Height / RenderScaling);
+    internal OpenHarmonyInsetsManager Insets { get; } = new();
+    internal OpenHarmonyInputPane InputPane { get; } = new();
     public double RenderScaling { get; private set; } = 1;
     public double DesktopScaling => RenderScaling;
     internal PixelPoint ScreenOrigin { get; set; }
@@ -160,11 +163,16 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
             return _navigation;
         if (featureType == typeof(IScreenImpl))
             return _screens;
+        if (featureType == typeof(IInsetsManager))
+            return Insets;
+        if (featureType == typeof(IInputPane))
+            return InputPane;
         return null;
     }
 
     public void Dispose()
     {
+        Insets.Dispose();
         _textInput?.SetClient(null);
         _eglWindow?.Dispose();
         NativeMemory.Free((void*)_pixels);

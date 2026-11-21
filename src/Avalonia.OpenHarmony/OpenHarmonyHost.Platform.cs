@@ -90,7 +90,9 @@ public sealed partial class OpenHarmonyHost
         if (_topLevel?.Surface != surface)
             return;
         _surfaceOffset = offset;
+        _hasSurfaceOffset = true;
         UpdateSurfaceOrigin();
+        RefreshWindowInsets();
     });
 
     /// <summary>Asks the current Avalonia view to handle the system back action.</summary>

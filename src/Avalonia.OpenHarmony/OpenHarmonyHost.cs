@@ -100,6 +100,7 @@ public sealed partial class OpenHarmonyHost
                 return;
             }
             _topLevel.Resize(width, height, scaling);
+            RefreshWindowInsets();
         });
 
     private void OpenSurface(long surface, int width, int height, double scaling)
@@ -127,7 +128,10 @@ public sealed partial class OpenHarmonyHost
         {
             _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError,
                 _screens, _launcher, _storageProvider, eglWindow);
+            if (_requestInsetsCommand is { } command)
+                _topLevel.Insets.SetRequestHandler(command, _reportError);
             _topLevel.Resize(width, height, scaling);
+            RefreshWindowInsets();
             _root = new EmbeddableControlRoot(_topLevel);
             _root.Content = _lifetime.MainView;
             _root.Prepare();
@@ -150,7 +154,11 @@ public sealed partial class OpenHarmonyHost
         ReportSoftwareFallback(error);
         var size = topLevel.PixelSize;
         var scaling = topLevel.RenderScaling;
+        var offset = _surfaceOffset;
+        var hasOffset = _hasSurfaceOffset;
         CloseSurface();
+        _surfaceOffset = offset;
+        _hasSurfaceOffset = hasOffset;
         OpenSurface(surface, size.Width, size.Height, scaling);
     }
 
@@ -184,6 +192,7 @@ public sealed partial class OpenHarmonyHost
         _topLevel = null;
         _rendering = false;
         _surfaceOffset = default;
+        _hasSurfaceOffset = false;
     }
 
     public void Touch(long surface, long contact, TouchPhase phase, double x, double y) =>

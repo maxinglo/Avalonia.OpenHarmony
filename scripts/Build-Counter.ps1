@@ -65,7 +65,8 @@ $counterExports = @(
     'avaoh_resize', 'avaoh_destroy', 'avaoh_touch',
     'avaoh_key', 'avaoh_pointer', 'avaoh_input_blur', 'avaoh_paste',
     'avaoh_set_lifecycle', 'avaoh_set_theme', 'avaoh_set_displays', 'avaoh_set_window_position',
-    'avaoh_set_surface_offset', 'avaoh_request_back'
+    'avaoh_set_surface_offset', 'avaoh_request_back',
+    'avaoh_set_avoid_area', 'avaoh_set_window_inset_properties', 'avaoh_clear_window_insets'
 )
 foreach ($export in $counterExports) {
     if ($symbols -notmatch "\b$export\b") { throw "The NativeAOT application is missing $export." }

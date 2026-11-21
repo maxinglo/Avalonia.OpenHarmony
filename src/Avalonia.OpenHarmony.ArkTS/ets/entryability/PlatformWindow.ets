@@ -2,6 +2,7 @@ import { Configuration, ConfigurationConstant } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import bridge from 'libavalonia_ohos_bridge.so';
+import { WindowInsetsObserver } from './WindowInsets';
 
 export enum HostLifecycle {
   WindowHidden = 0,
@@ -23,6 +24,7 @@ export function updateTheme(config: Configuration): void {
 export class PlatformWindow {
   private stage: window.WindowStage;
   private mainWindow: window.Window;
+  private insets: WindowInsetsObserver;
   private hostDisplay: display.Display | undefined = undefined;
   private useWindowVisibility: boolean = false;
 
@@ -63,6 +65,7 @@ export class PlatformWindow {
   constructor(stage: window.WindowStage, mainWindow: window.Window) {
     this.stage = stage;
     this.mainWindow = mainWindow;
+    this.insets = new WindowInsetsObserver(mainWindow);
   }
 
   start(): void {
@@ -78,9 +81,11 @@ export class PlatformWindow {
     this.observe(() => bridge.setLifecycle(this.mainWindow.isFocused() ?
       HostLifecycle.WindowActive : HostLifecycle.WindowInactive));
     this.refreshDisplays();
+    this.insets.start();
   }
 
   stop(): void {
+    this.insets.stop();
     bridge.setLifecycle(HostLifecycle.WindowHidden);
     if (!this.useWindowVisibility) {
       this.observe(() => this.stage.off('windowStageLifecycleEvent', this.stageEvent));

@@ -103,7 +103,30 @@ begun, the bridge consumes the request at its deadline to avoid a second
 navigation. [ArkUI entry page lifecycle](https://developer.huawei.com/consumer/en/doc/harmonyos-references/ts-custom-component-lifecycle/)
 
 The sample's `Program.Platform.cs` shows the optional NativeAOT exports. Avalonia secondary windows, application-driven
-foreground and background commands, color accents, system font scale and safe-area integration remain pending.
+foreground and background commands, color accents and system font scale remain pending.
+
+### Safe areas and input pane
+
+The shared ArkTS host reads initial window avoidance data and subscribes to `avoidAreaChange`. Avalonia receives safe
+area padding for system bars and cutouts that overlap the actual XComponent client area. The intersection is computed
+in window-local physical pixels and then converted using the surface's rendering scale. Space already excluded by
+ArkUI contributes zero
+padding. [HarmonyOS immersive layout and avoidance coordinates](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/immersive-window-feature/)
+
+`TopLevel.InputPane` reports the fixed keyboard and its occlusion in Avalonia client coordinates. The fixed keyboard
+can remain open with an empty occlusion when ArkUI resizes the surface to avoid it. The platform does not infer an
+occlusion from a height-only notification, and a floating keyboard does not contribute an inset. Notifications report
+the received geometry without a keyboard animation
+curve. [HarmonyOS keyboard avoidance](https://developer.huawei.com/consumer/en/doc/HarmonyOS-Guides/window-faqs/)
+
+The optional commands travel through the existing ArkTS system request service. Pass the main window to
+`registerSystemRequests(context, mainWindow)`, retain its cleanup callback, and use
+`host.UseInsetsCommands(OpenHarmonySystemRequests.RequestAsync)`. The preferences request immersive layout and
+visibility for the status and three-button navigation bars, or set the status bar background. Avalonia reads the
+resulting window mode, reserved system-bar area, and status bar color from HarmonyOS. System-bar visibility reads as
+unknown when HarmonyOS reports zero reserved area. Visibility and color commands are limited to supporting device types
+and window modes. Layout follows the actual XComponent
+geometry. [HarmonyOS window system bars](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
 
 ## Compatibility
 

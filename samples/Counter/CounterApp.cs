@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Platform;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
@@ -109,6 +110,15 @@ public sealed class CounterApp : Application
                 ReportStatus(opened ? "Website launch accepted" : "Website launch unavailable");
             }, ReportStatus);
 
+            var immersive = new Button { Content = "Toggle immersive layout" };
+            immersive.Click += (_, _) =>
+            {
+                if (TopLevel.GetTopLevel(editor)?.InsetsManager is not { } insets)
+                    return;
+                insets.DisplayEdgeToEdgePreference = !insets.DisplayEdgeToEdgePreference;
+                ReportStatus($"Immersive layout requested: {insets.DisplayEdgeToEdgePreference}");
+            };
+
             var content = new StackPanel
             {
                 Spacing = 16,
@@ -119,7 +129,7 @@ public sealed class CounterApp : Application
                     text,
                     editor,
                     picker,
-                    new WrapPanel { Children = { copy, open, save, folder, link } },
+                    new WrapPanel { Children = { copy, open, save, folder, link, immersive } },
                     status
                 }
             };
@@ -133,8 +143,11 @@ public sealed class CounterApp : Application
                 Trace($"Wheel: {args.Delta.X:F2} {args.Delta.Y:F2}"),
                 RoutingStrategies.Tunnel, handledEventsToo: true);
             ObserveTopLevel(border, ("Count button", button), ("Editor", editor), ("ComboBox", picker),
-                ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link));
-            lifetime.MainView = border;
+                ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link),
+                ("Immersive", immersive));
+            var surface = new Border { Child = border };
+            TopLevel.SetAutoSafeAreaPadding(surface, true);
+            lifetime.MainView = surface;
         }
         base.OnFrameworkInitializationCompleted();
     }
@@ -145,6 +158,18 @@ public sealed class CounterApp : Application
         string? lastLayout = null;
         void ScaleChanged(object? sender, EventArgs args) => Trace($"DPI scale: {current?.RenderScaling:F2}");
         void BackRequested(object? sender, RoutedEventArgs args) => Trace("System Back received");
+        void SafeAreaChanged(object? sender, SafeAreaChangedArgs args) => ReportSafeArea();
+        void InputPaneChanged(object? sender, InputPaneStateEventArgs args) => ReportInputPane();
+        void ReportSafeArea()
+        {
+            if (current?.InsetsManager is { } insets)
+                Trace($"Safe area: {insets.SafeAreaPadding}. Edge to edge: {insets.DisplaysEdgeToEdge}");
+        }
+        void ReportInputPane()
+        {
+            if (current?.InputPane is { } pane)
+                Trace($"Input pane: {pane.State}. Occlusion: {pane.OccludedRect}");
+        }
         content.AttachedToVisualTree += (_, _) =>
         {
             current = TopLevel.GetTopLevel(content);
@@ -152,7 +177,13 @@ public sealed class CounterApp : Application
             {
                 current.ScalingChanged += ScaleChanged;
                 current.BackRequested += BackRequested;
+                if (current.InsetsManager is { } insets)
+                    insets.SafeAreaChanged += SafeAreaChanged;
+                if (current.InputPane is { } pane)
+                    pane.StateChanged += InputPaneChanged;
                 ScaleChanged(null, EventArgs.Empty);
+                ReportSafeArea();
+                ReportInputPane();
             }
         };
         content.DetachedFromVisualTree += (_, _) =>
@@ -161,6 +192,10 @@ public sealed class CounterApp : Application
             {
                 current.ScalingChanged -= ScaleChanged;
                 current.BackRequested -= BackRequested;
+                if (current.InsetsManager is { } insets)
+                    insets.SafeAreaChanged -= SafeAreaChanged;
+                if (current.InputPane is { } pane)
+                    pane.StateChanged -= InputPaneChanged;
             }
             current = null;
             lastLayout = null;

@@ -4,6 +4,8 @@ import bridge from 'libavalonia_ohos_bridge.so';
 class SurfaceController extends XComponentController {
   surfaceId: string = '';
   scale: number = 1;
+  offsetX: number = 0;
+  offsetY: number = 0;
   private mouseButtons: number = 0;
   private mouseX: number = 0;
   private mouseY: number = 0;
@@ -21,6 +23,8 @@ class SurfaceController extends XComponentController {
     }
     try {
       this.scale = this.readScale();
+      this.offsetX = rect.offsetX ?? 0;
+      this.offsetY = rect.offsetY ?? 0;
       bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale);
       this.geometryChanged();
     } catch (error) {
@@ -181,7 +185,8 @@ export struct AvaloniaSurfaceHost {
     if (surfaceId) {
       try {
         const info = this.getUIContext().getComponentUtils().getRectangleById('avalonia-surface');
-        bridge.setSurfaceOffset(surfaceId, Math.round(info.windowOffset.x), Math.round(info.windowOffset.y));
+        bridge.setSurfaceOffset(surfaceId, Math.round(info.windowOffset.x + this.surface.offsetX),
+          Math.round(info.windowOffset.y + this.surface.offsetY));
       } catch (error) {
         hilog.warn(0x0202, 'AvaloniaOHOS', 'Surface position: %{public}s', (error as Error).message);
       }

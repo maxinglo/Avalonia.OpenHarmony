@@ -40,6 +40,10 @@ struct AppLibrary {
         setDisplays = reinterpret_cast<decltype(setDisplays)>(dlsym(handle, "avaoh_set_displays"));
         setWindowPosition = reinterpret_cast<decltype(setWindowPosition)>(dlsym(handle, "avaoh_set_window_position"));
         setSurfaceOffset = reinterpret_cast<decltype(setSurfaceOffset)>(dlsym(handle, "avaoh_set_surface_offset"));
+        setAvoidArea = reinterpret_cast<decltype(setAvoidArea)>(dlsym(handle, "avaoh_set_avoid_area"));
+        setWindowInsetProperties = reinterpret_cast<decltype(setWindowInsetProperties)>(
+            dlsym(handle, "avaoh_set_window_inset_properties"));
+        clearWindowInsets = reinterpret_cast<decltype(clearWindowInsets)>(dlsym(handle, "avaoh_clear_window_insets"));
         requestBack = reinterpret_cast<decltype(requestBack)>(dlsym(handle, "avaoh_request_back"));
         paste = reinterpret_cast<decltype(paste)>(dlsym(handle, "avaoh_paste"));
     }
@@ -57,6 +61,9 @@ struct AppLibrary {
     avalonia::DisplayCallback setDisplays = nullptr;
     void (*setWindowPosition)(int64_t, int32_t, int32_t) = nullptr;
     void (*setSurfaceOffset)(int64_t, int32_t, int32_t) = nullptr;
+    void (*setAvoidArea)(int32_t, const int32_t*) = nullptr;
+    void (*setWindowInsetProperties)(int32_t, int32_t, uint32_t) = nullptr;
+    void (*clearWindowInsets)() = nullptr;
     int32_t (*requestBack)() = nullptr;
     void (*paste)() = nullptr;
 
@@ -230,6 +237,47 @@ napi_value RequestBack(napi_env env, napi_callback_info)
     napi_value result = nullptr;
     napi_get_boolean(env, callback != nullptr && callback() != 0, &result);
     return result;
+}
+
+napi_value SetAvoidArea(napi_env env, napi_callback_info info)
+{
+    size_t count = 2;
+    napi_value args[2];
+    int32_t kind;
+    napi_typedarray_type type;
+    size_t length = 0;
+    void* data = nullptr;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 2 ||
+        napi_get_value_int32(env, args[0], &kind) != napi_ok || kind < 0 || kind == 2 || kind > 5 ||
+        napi_get_typedarray_info(env, args[1], &type, &length, &data, nullptr, nullptr) != napi_ok ||
+        type != napi_int32_array || length != 16 || data == nullptr)
+        return Error(env, "Expected an avoidance type and four pixel rectangles.");
+    if (auto callback = App().setAvoidArea; callback != nullptr)
+        callback(kind, static_cast<const int32_t*>(data));
+    return nullptr;
+}
+
+napi_value SetWindowInsetProperties(napi_env env, napi_callback_info info)
+{
+    size_t count = 3;
+    napi_value args[3];
+    bool edgeToEdge, hasColor;
+    uint32_t color;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 3 ||
+        napi_get_value_bool(env, args[0], &edgeToEdge) != napi_ok ||
+        napi_get_value_bool(env, args[1], &hasColor) != napi_ok ||
+        napi_get_value_uint32(env, args[2], &color) != napi_ok)
+        return Error(env, "Expected immersive mode and the optional ARGB status bar color.");
+    if (auto callback = App().setWindowInsetProperties; callback != nullptr)
+        callback(edgeToEdge ? 1 : 0, hasColor ? 1 : 0, color);
+    return nullptr;
+}
+
+napi_value ClearWindowInsets(napi_env, napi_callback_info)
+{
+    if (auto callback = App().clearWindowInsets; callback != nullptr)
+        callback();
+    return nullptr;
 }
 
 napi_value UpdateSurface(napi_env env, napi_callback_info info)
@@ -452,6 +500,10 @@ napi_value Init(napi_env env, napi_value exports)
         {"refreshDisplays", nullptr, RefreshDisplays, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setWindowPosition", nullptr, SetWindowPosition, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSurfaceOffset", nullptr, SetSurfaceOffset, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setAvoidArea", nullptr, SetAvoidArea, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setWindowInsetProperties", nullptr, SetWindowInsetProperties, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
+        {"clearWindowInsets", nullptr, ClearWindowInsets, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestBack", nullptr, RequestBack, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestPaste", nullptr, RequestPaste, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"updateSurface", nullptr, UpdateSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
