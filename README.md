@@ -183,7 +183,9 @@ System apps and a standard unsigned ArkUI TextInput sample later opened the keyb
 emulator. The standard sample received nine characters through the system keyboard. A later cold launch of the
 Avalonia Counter also displayed the keyboard and did not reproduce `12800008`. The EGL package received multiple
 system keyboard commits in the Avalonia TextBox. A hardware Backspace removed the sample's trailing emoji in one
-action. Soft-keyboard Backspace still needs device verification.
+action. In the expanded Counter, touching the editor after the input method process had stopped started the process
+and opened the keyboard. A still-focused editor can retry `12800008` twice. The retry was exercised with a native mock.
+Soft-keyboard Backspace and system composition preview still need device verification.
 
 ## Repository workflow
 
