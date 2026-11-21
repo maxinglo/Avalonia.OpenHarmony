@@ -122,8 +122,11 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
             TouchPhase.End => RawPointerEventType.TouchEnd,
             _ => RawPointerEventType.TouchCancel
         };
-        Input?.Invoke(new RawTouchEventArgs(_touch, (ulong)_clock.ElapsedMilliseconds, _inputRoot, kind,
-            new Point(x / RenderScaling, y / RenderScaling), RawInputModifiers.None, contact));
+        var raw = new RawTouchEventArgs(_touch, (ulong)_clock.ElapsedMilliseconds, _inputRoot, kind,
+            new Point(x / RenderScaling, y / RenderScaling), RawInputModifiers.None, contact);
+        if (phase == TouchPhase.Begin && contact < 0)
+            raw.PlatformInputEventCookie = new OpenHarmonyTextDragGesture(contact);
+        Input?.Invoke(raw);
     }
 
     public void SetInputRoot(IInputRoot inputRoot) => _inputRoot = inputRoot;

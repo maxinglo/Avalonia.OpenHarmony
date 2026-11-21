@@ -45,6 +45,9 @@ public sealed partial class CounterApp
         };
         var editor = new TextBox { PlaceholderText = "Type in child window", MaxWidth = 400 };
         var dropTarget = CounterDropTarget.Create(editor, message => Trace($"Child {message}"));
+#if OHOS
+        var dragSource = CreateTextDragSource(message => Trace($"Child {message}"));
+#endif
         var move = new Button { Content = "Move child" };
         move.Click += (_, _) => window.Position += new PixelPoint(48, 24);
         var resize = new Button { Content = "Resize child" };
@@ -66,12 +69,25 @@ public sealed partial class CounterApp
                 {
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Spacing = 8,
-                    Children = { counter, editor, dropTarget, new WrapPanel { Children = { move, resize, close } } }
+                    Children =
+                    {
+                        counter,
+                        editor,
+                        dropTarget,
+#if OHOS
+                        dragSource,
+#endif
+                        new WrapPanel { Children = { move, resize, close } }
+                    }
                 }
             }
         };
         window.Content = content;
-        ObserveTopLevel(content, ("Child drop target", dropTarget));
+        ObserveTopLevel(content,
+#if OHOS
+            ("Child drag source", dragSource),
+#endif
+            ("Child drop target", dropTarget));
         window.Opened += (_, _) => Trace("Avalonia child opened");
         window.PositionChanged += (_, e) => Trace($"Avalonia child position: {e.Point}");
         window.Resized += (_, e) => Trace($"Avalonia child size: {e.ClientSize}");

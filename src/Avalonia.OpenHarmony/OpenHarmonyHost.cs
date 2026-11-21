@@ -291,6 +291,8 @@ public sealed partial class OpenHarmonyHost
         locator.Bind<IActivatableLifetime>().ToConstant(_lifetime);
         locator.Bind<IKeyboardDevice>().ToSingleton<KeyboardDevice>();
         locator.Bind<PlatformHotkeyConfiguration>().ToSingleton<PlatformHotkeyConfiguration>();
+        if (locator.GetService<OpenHarmonyTextDragOptions>() is { } textDrag)
+            locator.Bind<IPlatformDragSource>().ToConstant(new OpenHarmonyTextDragSource(textDrag.Request, _reportError));
         locator.Bind<ICursorFactory>().ToSingleton<CursorFactory>();
         locator.Bind<IRenderLoop>().ToConstant(RenderLoop.FromTimer(new UiThreadRenderTimer(60)));
         locator.Bind<IWindowingPlatform>().ToConstant(new OpenHarmonyChildWindowingPlatform(CreateOwnedWindow,

@@ -120,6 +120,9 @@ public sealed partial class CounterApp : Application
             };
 
             var dropTarget = CounterDropTarget.Create(editor, ReportStatus);
+#if OHOS
+            var dragSource = CreateTextDragSource(ReportStatus);
+#endif
             var content = new StackPanel
             {
                 Spacing = 16,
@@ -130,6 +133,9 @@ public sealed partial class CounterApp : Application
                     text,
                     editor,
                     dropTarget,
+#if OHOS
+                    dragSource,
+#endif
                     picker,
                     new WrapPanel { Children = { copy, open, save, folder, link, immersive } },
                     status
@@ -149,6 +155,9 @@ public sealed partial class CounterApp : Application
                 RoutingStrategies.Tunnel, handledEventsToo: true);
             ObserveTopLevel(border, ("Count button", button), ("Editor", editor), ("Drop target", dropTarget), ("ComboBox", picker),
                 ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link),
+#if OHOS
+                ("Drag source", dragSource),
+#endif
                 ("Immersive", immersive));
             var surface = new Border { Child = border };
             TopLevel.SetAutoSafeAreaPadding(surface, true);
@@ -156,6 +165,36 @@ public sealed partial class CounterApp : Application
         }
         base.OnFrameworkInitializationCompleted();
     }
+
+#if OHOS
+    private static Control CreateTextDragSource(Action<string> report)
+    {
+        var label = new TextBlock
+        {
+            Text = "Drag Avalonia sample text",
+            Margin = new Thickness(12),
+            Foreground = Avalonia.Media.Brushes.White
+        };
+        var source = new Border
+        {
+            Background = Avalonia.Media.Brushes.RoyalBlue,
+            Child = label,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            CornerRadius = new CornerRadius(6)
+        };
+        source.PointerPressed += async (_, args) =>
+        {
+            if (args.Pointer.Type != PointerType.Touch)
+                return;
+            args.Handled = true;
+            var data = new DataTransfer();
+            data.Add(DataTransferItem.CreateText(SampleText));
+            var result = await DragDrop.DoDragDropAsync(args, data, DragDropEffects.Copy);
+            report(result == DragDropEffects.Copy ? "Sample text dragged: Copy" : "Sample text drag canceled");
+        };
+        return source;
+    }
+#endif
 
     private static void ObserveTopLevel(Control content, params (string Name, Control Element)[] targets)
     {

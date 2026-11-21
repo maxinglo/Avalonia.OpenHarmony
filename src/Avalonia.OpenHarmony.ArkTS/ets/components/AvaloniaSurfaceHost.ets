@@ -1,8 +1,10 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { accessibility } from '@kit.AccessibilityKit';
-import { NodeContent } from '@kit.ArkUI';
+import { dragController, NodeContent } from '@kit.ArkUI';
+import { unifiedDataChannel } from '@kit.ArkData';
 import bridge from 'libavalonia_ohos_bridge.so';
 import { AvaloniaDropReceiver, avaloniaDropTypes } from './AvaloniaDropReceiver';
+import { AvaloniaTextDragSource } from './AvaloniaTextDragSource';
 
 class SurfaceController extends XComponentController {
   surfaceId: string = '';
@@ -10,6 +12,7 @@ class SurfaceController extends XComponentController {
   offsetX: number = 0;
   offsetY: number = 0;
   windowKey: number = 0;
+  textDragSource: AvaloniaTextDragSource | undefined;
   private mouseButtons: number = 0;
   private mouseX: number = 0;
   private mouseY: number = 0;
@@ -41,11 +44,12 @@ class SurfaceController extends XComponentController {
   }
 
   onSurfaceDestroyed(surfaceId: string): void {
-    bridge.closeSurface(surfaceId);
     if (this.surfaceId === surfaceId) {
+      this.textDragSource?.surfaceDestroyed();
       this.surfaceId = '';
       this.resetHardwareState();
     }
+    bridge.closeSurface(surfaceId);
   }
 
   onTouch(event: TouchEvent): void {
@@ -70,7 +74,13 @@ class SurfaceController extends XComponentController {
         return;
     }
     for (const point of event.changedTouches) {
-      bridge.touch(this.surfaceId, point.id, phase, point.x * this.scale, point.y * this.scale);
+      const contact = this.textDragSource?.contact(point.id, phase) ?? point.id;
+      bridge.touch(this.surfaceId, contact, phase, point.x * this.scale, point.y * this.scale);
+    }
+    if (phase === 3 && this.textDragSource !== undefined) {
+      for (const contact of this.textDragSource.cancelContacts()) {
+        bridge.touch(this.surfaceId, contact, phase, 0, 0);
+      }
     }
   }
 
@@ -165,6 +175,7 @@ class SurfaceController extends XComponentController {
   }
 
   onHardwareBlur(): void {
+    this.textDragSource?.revokeGestures();
     if (this.surfaceId) {
       bridge.inputBlur(this.surfaceId);
     }
@@ -182,6 +193,7 @@ class SurfaceController extends XComponentController {
 @Component
 export struct AvaloniaSurfaceHost {
   @Prop enableAccessibility: boolean = false;
+  @Prop enableTextDragSource: boolean = false;
   @Prop windowKey: number = 0;
   @Prop enableInboundDrop: boolean = false;
   private surface: SurfaceController = new SurfaceController();
@@ -202,6 +214,10 @@ export struct AvaloniaSurfaceHost {
     this.surface.windowKey = this.windowKey;
     this.surface.readScale = (): number => this.getUIContext().vp2px(1);
     this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
+    if (this.enableTextDragSource) {
+      this.surface.textDragSource = new AvaloniaTextDragSource(
+        (pointerId: number, text: string): Promise<boolean> => this.startTextDrag(pointerId, text));
+    }
     if (this.enableAccessibility) {
       this.accessibilityActive = accessibility.isOpenAccessibilitySync();
       accessibility.on('accessibilityStateChange', this.accessibilityChanged);
@@ -209,12 +225,38 @@ export struct AvaloniaSurfaceHost {
   }
 
   aboutToDisappear(): void {
+    this.surface.textDragSource?.surfaceDestroyed();
     if (this.enableInboundDrop && this.surface.surfaceId) {
       bridge.drag(this.surface.surfaceId, 2, 0, 0, 0, 0, '');
     }
     if (this.enableAccessibility) {
       accessibility.off('accessibilityStateChange', this.accessibilityChanged);
       this.accessibilityChanged(false);
+    }
+  }
+
+  @Builder
+  private textDragPreview() {
+    Text('Text')
+      .height(48).width(92).textAlign(TextAlign.Center).fontColor(Color.White)
+      .backgroundColor(0x24549B).borderRadius(12)
+  }
+
+  private async startTextDrag(pointerId: number, text: string): Promise<boolean> {
+    const plainText = new unifiedDataChannel.PlainText();
+    plainText.textContent = text;
+    const info: dragController.DragInfo = {
+      pointerId,
+      data: new unifiedDataChannel.UnifiedData(plainText)
+    };
+    try {
+      const result = await this.getUIContext().getDragController().executeDrag((): void => this.textDragPreview(), info);
+      const status = result.event.getResult();
+      hilog.info(0x0202, 'AvaloniaOHOS', 'System text drag result: %{public}d', status);
+      return status === DragResult.DRAG_SUCCESSFUL;
+    } catch (error) {
+      hilog.warn(0x0202, 'AvaloniaOHOS', 'Could not start system text drag: %{public}s', (error as Error).message);
+      return false;
     }
   }
 

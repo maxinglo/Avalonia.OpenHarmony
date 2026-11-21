@@ -50,8 +50,5 @@ coordinates. The windowed Counter also exposes a separate drop target in each ow
 
 ## Starting a drag
 
-Avalonia drag sources require an `IPlatformDragSource` implementation. For a programmatic drag, ArkUI requires the
-active platform pointer ID and a preview. The ArkTS route uses a page UI context and `getDragController().executeDrag`.
-The NDK route uses `OH_ArkUI_CreateDragActionWithContext`, a platform pointer ID, previews, data and a status listener.
-Outbound support requires associating the Avalonia pointer event with the active ArkUI pointer and delivering
-asynchronous drag completion. [ArkTS DragController](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-arkui-dragcontroller/) · [NDK drag actions](https://developer.huawei.com/consumer/en/doc/harmonyos-references/capi-drag-and-drop-h/)
+The touch drag source sends plain text to the system with a Copy effect. Its opt-in is independent of receiving
+drops. [Starting a system text drag](text-drag-source.md)

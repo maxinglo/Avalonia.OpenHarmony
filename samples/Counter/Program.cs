@@ -20,6 +20,9 @@ public static partial class Program
 #if OHOS_COUNTER_WINDOWS
         builder.With(new OpenHarmonyWindowOptions());
 #endif
+#if OHOS
+        builder.With(new OpenHarmonyTextDragOptions());
+#endif
         return builder;
     }
 
