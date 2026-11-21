@@ -22,7 +22,9 @@ public enum OpenHarmonyChildWindowEvent
     Hidden,
     Focused,
     Unfocused,
-    Destroyed
+    Destroyed,
+    StageCreated,
+    ModalityReleased
 }
 
 public sealed partial class OpenHarmonyHost
@@ -32,6 +34,8 @@ public sealed partial class OpenHarmonyHost
     private int _nextChildId;
     private WindowRoute? _stageRoute;
     private Window? _stageRoot;
+    private bool _stageCanOpen = true;
+    private long _closedStageToken;
 
     private WindowRoute CreateWindowRoute(int id, bool isStage, OpenHarmonyWindowOptions options)
     {
@@ -40,7 +44,7 @@ public sealed partial class OpenHarmonyHost
             (_, pixels, width, height, rowBytes) =>
             {
                 var token = Volatile.Read(ref route.Token);
-                if (token != 0)
+                if (token != 0 && !route.Window.IsCloseRequested)
                     _present(token, pixels, width, height, rowBytes);
             }, isStage ? _getInputWindowId : () => route.PlatformId, _reportError,
             _screens, _launcher, _storageProvider, null);
@@ -63,8 +67,15 @@ public sealed partial class OpenHarmonyHost
 
     private void UpdateStageSurface(OpenHarmonyWindowOptions options, long token, int width, int height, double scaling)
     {
+        if (!_stageCanOpen)
+        {
+            _closedStageToken = Math.Max(_closedStageToken, token);
+            return;
+        }
         if (_stageRoute is null)
         {
+            if (token <= _closedStageToken)
+                return;
             var route = CreateWindowRoute(0, true, options);
             _stageRoute = route;
             _topLevel = route.Window.Surface;
@@ -123,7 +134,7 @@ public sealed partial class OpenHarmonyHost
     /// <summary>Registers the XComponent surface for an existing Avalonia child window.</summary>
     public void UpdateChildSurface(int key, long token, int width, int height, double scaling) => Post(() =>
     {
-        if (!_children.TryGetValue(key, out var route))
+        if (!_children.TryGetValue(key, out var route) || route.Window.IsCloseRequested)
             return;
         var previousToken = route.Token;
         if (!UpdateRouteSurface(route, token, width, height, scaling))
@@ -165,9 +176,12 @@ public sealed partial class OpenHarmonyHost
     /// <summary>Reports actual visibility, focus or disposal of a native child window.</summary>
     public void ReportChildEvent(int key, OpenHarmonyChildWindowEvent state) => Post(() =>
     {
-        if (key == 0 && state == OpenHarmonyChildWindowEvent.Destroyed)
+        if (key == 0)
         {
-            DestroyStage();
+            if (state == OpenHarmonyChildWindowEvent.StageCreated)
+                _stageCanOpen = true;
+            else if (state == OpenHarmonyChildWindowEvent.Destroyed)
+                DestroyStage();
             return;
         }
         if (!_children.TryGetValue(key, out var route))
@@ -180,7 +194,7 @@ public sealed partial class OpenHarmonyHost
                 break;
             case OpenHarmonyChildWindowEvent.Hidden:
                 route.Visible = false;
-                route.Window.ReportVisible(false);
+                route.Window.ReportNativeHidden();
                 route.Focused = false;
                 break;
             case OpenHarmonyChildWindowEvent.Focused:
@@ -192,6 +206,9 @@ public sealed partial class OpenHarmonyHost
             case OpenHarmonyChildWindowEvent.Destroyed:
                 route.Window.ReportDestroyed();
                 return;
+            case OpenHarmonyChildWindowEvent.ModalityReleased:
+                route.Window.ReportModalityReleased();
+                break;
         }
         RefreshChildInputMethod(route);
     });
@@ -226,6 +243,7 @@ public sealed partial class OpenHarmonyHost
 
     private void DestroyStage()
     {
+        _stageCanOpen = false;
         foreach (var child in _children.Values.ToArray())
             child.Window.ReportDestroyed();
         _stageRoute?.Window.ReportDestroyed();
@@ -235,8 +253,15 @@ public sealed partial class OpenHarmonyHost
     {
         if (window.IsStage)
         {
-            if (_stageRoute is { Token: > 0 } stage)
-                CloseAccessibility(stage.Token);
+            _stageCanOpen = false;
+            if (_stageRoute is { } stage)
+            {
+                _closedStageToken = Math.Max(_closedStageToken, stage.LatestToken);
+                if (stage.Token > 0)
+                    CloseAccessibility(stage.Token);
+            }
+            foreach (var child in _children.Values.ToArray())
+                child.Window.Dispose();
             if (_stageRoot is { } root)
                 root.Content = null;
             _stageRoot = null;
@@ -277,14 +302,15 @@ public sealed partial class OpenHarmonyHost
     {
         if (_stageRoute is { } stage && stage.Token == token)
             return stage.Window.Surface;
-        if (_childSurfaces.TryGetValue(token, out var child))
+        if (_childSurfaces.TryGetValue(token, out var child) && !child.Window.IsCloseRequested)
             return child.Window.Surface;
         return _stageRoute is null && _topLevel?.Surface == token ? _topLevel : null;
     }
 
     private void RefreshChildInputMethod(WindowRoute route)
     {
-        var active = _applicationForeground && route.Focused && route.Visible && route.Token != 0;
+        var active = !route.Window.IsCloseRequested &&
+            _applicationForeground && route.Focused && route.Visible && route.Token != 0;
         route.Window.Surface.SetInputMethodActive(active);
         route.Window.ReportFocus(active);
     }

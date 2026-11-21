@@ -11,11 +11,17 @@ namespace Avalonia.OpenHarmony;
 
 internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatformSurface
 {
+    private static readonly TimeSpan NativeCloseGrace = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan CloseRequestTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan[] CloseRetryDelays =
+        [TimeSpan.Zero, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(450)];
     private static long s_zOrder;
     private readonly Func<OpenHarmonyChildWindowRequest, Task<bool>> _request;
     private readonly Action<OpenHarmonyChildWindow> _closed;
     private readonly Action<string> _reportError;
     private OpenHarmonyChildWindow? _owner;
+    private OpenHarmonyChildWindow? _closingModalOwner;
+    private int _closingModalChildren;
     private PixelPoint? _requestedPosition;
     private PixelSize? _requestedFrameSize;
     private Size _initialClientSize;
@@ -24,12 +30,15 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     private bool _decorated = true;
     private bool _enabled = true;
     private bool _showRequested;
+    private bool _shownModally;
     private volatile bool _avaloniaVisible;
     private volatile bool _visible;
     private bool _focused;
     private bool _active;
     private bool _hasSurfaceGeometry;
     private bool _closingFromPlatform;
+    private bool _closeAttemptInProgress;
+    private volatile bool _closeRequested;
     private volatile bool _disposed;
     private volatile bool _framebufferAvailable;
     private Task _pending = Task.CompletedTask;
@@ -57,9 +66,10 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     internal long Id { get; }
     internal bool IsStage { get; }
     internal SurfaceTopLevel Surface { get; }
-    internal bool AcceptsInput => _enabled && CanRender;
+    internal bool AcceptsInput => _enabled && _closingModalChildren == 0 && CanRender;
+    internal bool IsCloseRequested => _closeRequested;
     internal long ZOrder { get; private set; }
-    private bool CanRender => _framebufferAvailable && _visible && _avaloniaVisible && !_disposed;
+    private bool CanRender => _framebufferAvailable && _visible && _avaloniaVisible && !_closeRequested && !_disposed;
     public IPlatformHandle? Handle => Surface.Handle;
     public Size ClientSize => _hasSurfaceGeometry ? Surface.ClientSize : _initialClientSize;
     public Size? FrameSize => _frame is { } frame
@@ -104,7 +114,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     public void Show(bool activate, bool isDialog)
     {
-        if (_disposed)
+        if (_closeRequested || _disposed)
             return;
         if (IsStage)
         {
@@ -122,6 +132,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
         var firstShow = !_showRequested;
         _showRequested = true;
+        _shownModally = isDialog;
         _avaloniaVisible = true;
         if (firstShow)
             _requestedFrameSize = GetFrameRequest(_initialClientSize, DesktopScaling);
@@ -178,7 +189,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     public void Resize(Size clientSize, WindowResizeReason reason = WindowResizeReason.Application)
     {
-        if (_disposed || IsStage || !double.IsFinite(clientSize.Width) || !double.IsFinite(clientSize.Height)
+        if (_closeRequested || _disposed || IsStage || !double.IsFinite(clientSize.Width) || !double.IsFinite(clientSize.Height)
             || clientSize.Width <= 0 || clientSize.Height <= 0)
             return;
         if (_hasSurfaceGeometry && Surface.ClientSize == clientSize)
@@ -198,7 +209,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     public void Move(PixelPoint point)
     {
-        if (_disposed || IsStage || _requestedPosition == point)
+        if (_closeRequested || _disposed || IsStage || _requestedPosition == point)
             return;
 
         _requestedPosition = point;
@@ -232,7 +243,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     internal void ReportFrame(PixelRect frame)
     {
-        if (_disposed || frame.Width <= 0 || frame.Height <= 0)
+        if (_closeRequested || _disposed || frame.Width <= 0 || frame.Height <= 0)
             return;
         var previous = Position;
         _frame = frame;
@@ -245,7 +256,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     internal void ApplySurfaceGeometry(int width, int height, double scaling,
         WindowResizeReason reason = WindowResizeReason.Unspecified)
     {
-        if (_disposed || width <= 0 || height <= 0)
+        if (_closeRequested || _disposed || width <= 0 || height <= 0)
             return;
         _resizeReason = !_hasSurfaceGeometry ? WindowResizeReason.Application
             : reason != WindowResizeReason.Unspecified ? reason
@@ -271,7 +282,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     internal void ReportVisible(bool visible)
     {
-        if (_disposed || _visible == visible)
+        if (_closeRequested || _disposed || _visible == visible)
             return;
         _visible = visible;
         RefreshActivation();
@@ -284,11 +295,20 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     internal void ReportFocus(bool focused)
     {
-        if (_disposed)
+        if (_closeRequested || _disposed)
             return;
         _focused = focused;
         RefreshActivation();
     }
+
+    internal void ReportNativeHidden()
+    {
+        ReportVisible(false);
+        // A failed native destroy can leave the window alive but no longer visible or modal.
+        ReportModalityReleased();
+    }
+
+    internal void ReportModalityReleased() => ReleaseClosingModalOwner();
 
     private void RefreshActivation()
     {
@@ -312,7 +332,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     /// <summary>Returns true to cancel a title-bar close before native destruction.</summary>
     internal bool RequestNativeClose()
     {
-        if (_disposed)
+        if (_closeRequested || _disposed)
             return false;
         _closingFromPlatform = true;
         try
@@ -328,22 +348,47 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         }
     }
 
-    internal void ReportDestroyed()
-    {
-        _closingFromPlatform = true;
-        try { Dispose(); }
-        finally { _closingFromPlatform = false; }
-    }
+    internal void ReportDestroyed() => FinishClose();
 
     public void Dispose()
     {
         if (_disposed)
             return;
+        if (IsStage || !_showRequested)
+        {
+            FinishClose();
+            return;
+        }
+
+        if (!_closeRequested)
+        {
+            _closeRequested = true;
+            if (_shownModally && _owner is { } owner)
+            {
+                // Avalonia clears Owner after Dispose returns, before async native destruction.
+                _closingModalOwner = owner;
+                owner._closingModalChildren++;
+            }
+            Surface.SetInputMethodActive(false);
+            RefreshActivation();
+        }
+
+        if (!_closeAttemptInProgress)
+        {
+            _closeAttemptInProgress = true;
+            _pending = CloseNativeAfterAsync(_pending, _closingFromPlatform);
+        }
+    }
+
+    private void FinishClose()
+    {
+        if (_disposed)
+            return;
+        _closeRequested = true;
         _disposed = true;
         _framebufferAvailable = false;
         RefreshActivation();
-        if (!IsStage && _showRequested && !_closingFromPlatform)
-            Enqueue(new(Id, OpenHarmonyChildWindowOperation.Close));
+        ReleaseClosingModalOwner();
         try
         {
             _closed(this);
@@ -353,6 +398,14 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             try { Surface.Dispose(); }
             finally { Closed?.Invoke(); }
         }
+    }
+
+    private void ReleaseClosingModalOwner()
+    {
+        if (_closingModalOwner is not { } owner)
+            return;
+        _closingModalOwner = null;
+        owner._closingModalChildren--;
     }
 
     private void DispatchInput(RawInputEventArgs args)
@@ -378,25 +431,18 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     private static int ToPixelCount(double pixels) => (int)Math.Clamp(Math.Ceiling(pixels), 1, int.MaxValue);
 
-    private void Enqueue(OpenHarmonyChildWindowRequest command) => _pending = SendAfterAsync(_pending, command);
+    private void Enqueue(OpenHarmonyChildWindowRequest command)
+    {
+        if (!_closeRequested && !_disposed)
+            _pending = SendAfterAsync(_pending, command);
+    }
 
     private async Task SendAfterAsync(Task previous, OpenHarmonyChildWindowRequest command)
     {
         await previous.ConfigureAwait(false);
-        // Dispatch progress and the failure callback asynchronously, even for a synchronous test transport.
-        if (_disposed && command.Operation != OpenHarmonyChildWindowOperation.Close)
+        if (_closeRequested || _disposed)
             return;
-        bool success;
-        try
-        {
-            success = await _request(command).ConfigureAwait(false);
-        }
-        catch (Exception error)
-        {
-            _reportError($"HarmonyOS window {Id} {command.Operation}: {error.Message}");
-            success = false;
-        }
-        if (success)
+        if (await SendAsync(command).ConfigureAwait(false))
             return;
 
         if (command.Operation is OpenHarmonyChildWindowOperation.Show or OpenHarmonyChildWindowOperation.Hide)
@@ -405,9 +451,51 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             _reportError($"HarmonyOS rejected {command.Operation} for window {Id}.");
     }
 
+    private async Task CloseNativeAfterAsync(Task previous, bool titleBarClose)
+    {
+        await previous.ConfigureAwait(false);
+        // Give windowWillClose time to return and the system time to send WINDOW_DESTROYED.
+        if (titleBarClose)
+            await Task.Delay(NativeCloseGrace).ConfigureAwait(false);
+        foreach (var delay in CloseRetryDelays)
+        {
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay).ConfigureAwait(false);
+            if (_disposed)
+                return;
+            if (await SendAsync(new(Id, OpenHarmonyChildWindowOperation.Close)).ConfigureAwait(false))
+            {
+                Dispatcher.UIThread.Post(FinishClose, DispatcherPriority.Input);
+                return;
+            }
+        }
+        Dispatcher.UIThread.Post(() =>
+        {
+            _closeAttemptInProgress = false;
+            if (!_disposed)
+                _reportError($"HarmonyOS window {Id} did not confirm destruction. Close can be requested again.");
+        }, DispatcherPriority.Input);
+    }
+
+    private async Task<bool> SendAsync(OpenHarmonyChildWindowRequest command)
+    {
+        try
+        {
+            var pending = _request(command);
+            if (command.Operation == OpenHarmonyChildWindowOperation.Close)
+                pending = pending.WaitAsync(CloseRequestTimeout);
+            return await pending.ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            _reportError($"HarmonyOS window {Id} {command.Operation}: {error.Message}");
+            return false;
+        }
+    }
+
     private void CloseAfterFailure(string message)
     {
-        if (_disposed)
+        if (_closeRequested || _disposed)
             return;
         _reportError(message);
         Dispose();
