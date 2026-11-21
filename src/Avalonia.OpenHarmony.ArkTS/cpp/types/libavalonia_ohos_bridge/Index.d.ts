@@ -21,8 +21,9 @@ export const requestBack: () => boolean;
 export const updateSurface: (surfaceId: string, width: number, height: number, scaling: number,
                              childWindowKey?: number) => void;
 export const closeSurface: (surfaceId: string) => void;
+/** Legacy screen coordinates are accepted for compatibility. */
 export const configureAccessibility: (surfaceId: string, enabled: boolean, content: NodeContent | null,
-                                      x: number, y: number) => number;
+                                      legacyScreenX?: number, legacyScreenY?: number) => number;
 export const touch: (surfaceId: string, contact: number, phase: number, physicalX: number, physicalY: number) => void;
 export const pointer: (surfaceId: string, phase: number, button: number, physicalX: number, physicalY: number,
                        wheelX: number, wheelY: number, modifiers: number) => void;

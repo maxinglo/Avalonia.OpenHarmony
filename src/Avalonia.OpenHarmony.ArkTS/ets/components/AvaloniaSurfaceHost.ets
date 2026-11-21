@@ -203,11 +203,7 @@ export struct AvaloniaSurfaceHost {
   private accessibilityStatus: number = -2;
   private accessibilityChanged = (enabled: boolean): void => {
     this.accessibilityActive = enabled;
-    if (enabled) {
-      this.updateSurfaceOrigin();
-    } else {
-      this.publishAccessibility(0, 0);
-    }
+    this.publishAccessibility();
   };
 
   aboutToAppear(): void {
@@ -260,14 +256,14 @@ export struct AvaloniaSurfaceHost {
     }
   }
 
-  private publishAccessibility(x: number, y: number): void {
+  private publishAccessibility(): void {
     const surfaceId = this.surface.surfaceId;
     if (!surfaceId || (!this.accessibilityActive && this.accessibilityStatus !== 0)) {
       return;
     }
     try {
       const status = bridge.configureAccessibility(surfaceId, this.accessibilityActive,
-        this.accessibilityActive ? this.semantics : null, x, y);
+        this.accessibilityActive ? this.semantics : null);
       if (status !== this.accessibilityStatus) {
         hilog.info(0x0202, 'AvaloniaOHOS', 'Accessibility registration: %{public}d', status);
       }
@@ -284,11 +280,10 @@ export struct AvaloniaSurfaceHost {
         const info = this.getUIContext().getComponentUtils().getRectangleById('avalonia-surface');
         bridge.setSurfaceOffset(surfaceId, Math.round(info.windowOffset.x + this.surface.offsetX),
           Math.round(info.windowOffset.y + this.surface.offsetY));
-        this.publishAccessibility(Math.round(info.screenOffset.x + this.surface.offsetX),
-          Math.round(info.screenOffset.y + this.surface.offsetY));
       } catch (error) {
         hilog.warn(0x0202, 'AvaloniaOHOS', 'Surface position: %{public}s', (error as Error).message);
       }
+      this.publishAccessibility();
     }
   }
 

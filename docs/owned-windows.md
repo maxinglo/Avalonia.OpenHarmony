@@ -50,8 +50,10 @@ In the integrated Counter, the child TextBox attached the HarmonyOS input method
 child window ID reported by WindowManager. The keyboard opened while that window held focus.
 Insets observation currently follows the stage window. In the accessibility-enabled
 HAP, both open surfaces registered successfully under ScreenReader. Activating the
-main button through ScreenReader incremented its counter. Child activation still
-needs a separate device check.
+main button through ScreenReader incremented its counter. An API 26 x86_64 experiment
+then verified activation in a moved child window. A single touch focused the child
+counter button. Double-touching a blank area invoked that button and changed the
+child count to 1.
 
 The final close-fix HAP repeated the normal modal and modeless flows. The modal child
 presented its own frame, ignored owner touches, accepted one child tap, and returned 1.

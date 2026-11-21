@@ -547,14 +547,13 @@ napi_value CloseSurface(napi_env env, napi_callback_info info)
 
 napi_value ConfigureAccessibility(napi_env env, napi_callback_info info)
 {
-    size_t count = 5;
-    napi_value args[5];
+    // Earlier ArkTS hosts pass two extra screen coordinates. Only read the shared arguments.
+    size_t count = 3;
+    napi_value args[3];
     uint64_t surfaceId;
     bool enabled;
-    int32_t screenX, screenY;
-    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 5 ||
-        !ParseSurfaceId(env, args[0], surfaceId) || napi_get_value_bool(env, args[1], &enabled) != napi_ok ||
-        napi_get_value_int32(env, args[3], &screenX) != napi_ok || napi_get_value_int32(env, args[4], &screenY) != napi_ok)
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count < 3 ||
+        !ParseSurfaceId(env, args[0], surfaceId) || napi_get_value_bool(env, args[1], &enabled) != napi_ok)
         return Error(env, "Invalid accessibility surface or state.");
     const auto token = SurfaceToken(surfaceId);
     int32_t result = -1;
@@ -564,8 +563,7 @@ napi_value ConfigureAccessibility(napi_env env, napi_callback_info info)
             result = 0;
         } else {
             auto& app = App();
-            result = accessibility::Attach(env, args[2], token, screenX, screenY,
-                app.accessibilityConfigure, app.accessibilityInvoke);
+            result = accessibility::Attach(env, args[2], token, app.accessibilityConfigure, app.accessibilityInvoke);
         }
     }
     napi_value value;

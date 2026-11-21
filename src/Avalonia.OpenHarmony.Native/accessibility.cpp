@@ -59,7 +59,6 @@ struct Registration {
     ArkUI_NodeHandle overlay;
     accessibility::Configure configure;
     accessibility::Invoke invoke;
-    ArkUI_IntOffset origin;
     std::shared_ptr<const Tree> tree;
     int32_t focus = 0;
 };
@@ -86,7 +85,6 @@ Registration* FindRegistration(const char* instance)
 
 struct Query {
     std::shared_ptr<const Tree> tree;
-    ArkUI_IntOffset origin{};
     int32_t focus = 0;
 };
 
@@ -96,7 +94,7 @@ Query Read(const char* instance)
     const auto* registration = FindRegistration(instance);
     if (registration == nullptr)
         return {};
-    return {registration->tree, registration->origin, registration->focus};
+    return {registration->tree, registration->focus};
 }
 
 const Node* Find(const Tree& tree, int64_t id)
@@ -111,23 +109,16 @@ const Node* Find(const Tree& tree, int64_t id)
 bool Actionable(const Node& node) { return (node.state & (Enabled | Invokable)) == (Enabled | Invokable); }
 bool Navigable(const Node& node) { return node.id != Root && (!node.name.empty() || (node.state & Focusable) != 0); }
 
-int32_t AddOffset(int32_t value, int32_t offset)
-{
-    return static_cast<int32_t>(std::clamp<int64_t>(static_cast<int64_t>(value) + offset, INT32_MIN, INT32_MAX));
-}
-
 int32_t Fill(const Query& query, const Node& node, ArkUI_AccessibilityElementInfo* info)
 {
     if (!info) return NoMemory;
-    const auto& bounds = node.bounds;
-    ArkUI_AccessibleRect screen{ AddOffset(bounds.leftTopX, query.origin.x),
-        AddOffset(bounds.leftTopY, query.origin.y), AddOffset(bounds.rightBottomX, query.origin.x),
-        AddOffset(bounds.rightBottomY, query.origin.y) };
+    // ArkUI hit tests in CustomNode coordinates and applies the host transform for screen queries.
+    auto bounds = node.bounds;
     OH_ArkUI_AccessibilityElementInfoSetElementId(info, node.id);
     OH_ArkUI_AccessibilityElementInfoSetParentId(info, node.id == Root ? RootParent : node.parent);
     OH_ArkUI_AccessibilityElementInfoSetComponentType(info, node.role.c_str());
     OH_ArkUI_AccessibilityElementInfoSetAccessibilityText(info, node.name.c_str());
-    OH_ArkUI_AccessibilityElementInfoSetScreenRect(info, &screen);
+    OH_ArkUI_AccessibilityElementInfoSetScreenRect(info, &bounds);
     OH_ArkUI_AccessibilityElementInfoSetVisible(info, true);
     OH_ArkUI_AccessibilityElementInfoSetEnabled(info, (node.state & Enabled) != 0);
     OH_ArkUI_AccessibilityElementInfoSetFocusable(info, Navigable(node));
@@ -284,19 +275,15 @@ bool ConfigureOverlay(ArkUI_NativeNodeAPI_1* api, ArkUI_NodeHandle node)
 }
 }
 
-int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surface, int32_t screenX, int32_t screenY,
-    Configure configure, Invoke invoke)
+int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surface, Configure configure, Invoke invoke)
 {
     if (!configure || !invoke)
         return Invalid;
-    const ArkUI_IntOffset origin{screenX, screenY};
     int64_t generation;
     {
         std::lock_guard lock(StateLock);
-        if (auto* current = FindRegistration(surface)) {
-            current->origin = origin;
+        if (FindRegistration(surface))
             return Ok;
-        }
         generation = ++NextRegistration;
     }
 
@@ -313,8 +300,7 @@ int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surf
         return Missing;
     }
     auto registration = std::make_unique<Registration>(Registration{
-        surface, generation, "avalonia-" + std::to_string(generation), api, content, node, configure, invoke, origin,
-        nullptr});
+        surface, generation, "avalonia-" + std::to_string(generation), api, content, node, configure, invoke, nullptr});
     ArkUI_AccessibilityProvider* provider = nullptr;
     auto result = OH_ArkUI_NativeModule_GetNativeAccessibilityProvider(&node, &provider);
     if (result == Ok)

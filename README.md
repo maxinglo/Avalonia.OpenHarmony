@@ -136,11 +136,11 @@ geometry. [HarmonyOS window system bars](https://developer.huawei.com/consumer/e
 
 Counter contains an experimental accessibility option, disabled by default. When that option and the HarmonyOS
 accessibility service are enabled, an independent, non-drawing ArkUI node exposes the semantics beside the XComponent.
-The ArkTS host provides the physical screen origin of the surface. The Avalonia dispatcher publishes a snapshot of
-visible
-automation peers with roles, names, bounds,
-enabled state, focus state, and Invoke capability. ArkUI queries read the cached snapshot. Invoke is dispatched back to
-Avalonia, where the host checks the active surface registration and node again before calling `IInvokeProvider`.
+The Avalonia dispatcher publishes a snapshot of visible automation peers with roles, names, bounds, enabled state,
+focus state, and Invoke capability. The bounds use physical pixels relative to the non-drawing CustomNode. ArkUI
+applies the host transform when returning screen coordinates. Its queries read the cached snapshot. Invoke is
+dispatched back to Avalonia, where the host checks the active surface registration and node again before calling
+`IInvokeProvider`.
 
 Set `enableAccessibility: true` on `AvaloniaSurfaceHost` and enable a HarmonyOS accessibility service.
 Application libraries opt in by exporting `avaoh_accessibility_configure` and `avaoh_accessibility_invoke`, as Counter
