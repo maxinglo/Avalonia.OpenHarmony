@@ -27,6 +27,7 @@ public sealed partial class OpenHarmonyHost
     private bool _rendering;
     private PixelPoint _windowPosition;
     private PixelPoint _surfaceOffset;
+    private bool IsInputMethodWindowActive => _applicationForeground && _windowVisible && _windowFocused;
 
     /// <summary>Queues a platform lifecycle change on the Avalonia UI dispatcher.</summary>
     public void SetLifecycle(OpenHarmonyLifecycleEvent transition) => Post(() =>
@@ -55,6 +56,7 @@ public sealed partial class OpenHarmonyHost
                 SetApplicationForeground(true);
                 break;
         }
+        _topLevel?.SetInputMethodActive(IsInputMethodWindowActive);
     });
 
     /// <summary>Reports the platform theme and notifies Avalonia when it changes.</summary>

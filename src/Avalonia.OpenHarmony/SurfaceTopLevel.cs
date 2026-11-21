@@ -124,6 +124,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     }
 
     public void SetInputRoot(IInputRoot inputRoot) => _inputRoot = inputRoot;
+    internal void SetInputMethodActive(bool active) => _textInput?.SetInputMethodActive(active);
     internal bool RequestBack() => _navigation.RequestBack();
 
     internal void InsertText(string text)
@@ -173,7 +174,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     public void Dispose()
     {
         Insets.Dispose();
-        _textInput?.SetClient(null);
+        _textInput?.Dispose();
         _eglWindow?.Dispose();
         NativeMemory.Free((void*)_pixels);
         _pixels = IntPtr.Zero;

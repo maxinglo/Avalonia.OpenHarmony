@@ -128,6 +128,7 @@ public sealed partial class OpenHarmonyHost
         {
             _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError,
                 _screens, _launcher, _storageProvider, eglWindow);
+            _topLevel.SetInputMethodActive(IsInputMethodWindowActive);
             if (_requestInsetsCommand is { } command)
                 _topLevel.Insets.SetRequestHandler(command, _reportError);
             _topLevel.Resize(width, height, scaling);

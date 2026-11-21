@@ -11,17 +11,16 @@ using static Avalonia.OpenHarmony.InputMethodApi;
 
 namespace Avalonia.OpenHarmony;
 
-internal sealed unsafe class NativeTextInput(
-    SurfaceTopLevel surface,
-    Func<int> getWindowId,
-    Action<string> reportError) : ITextInputMethodImpl
+internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDisposable
 {
     private const int InvalidPreviewRange = 401;
     private const int PreviewNotSupported = 12800011;
     private const int MaximumTextLength = 1_048_576;
     private static readonly ConcurrentDictionary<nint, Session> Sessions = new();
     private readonly Dispatcher _dispatcher = Dispatcher.UIThread;
-    private readonly SurfaceTopLevel _surface = surface;
+    private readonly SurfaceTopLevel _surface;
+    private readonly Func<int> _getWindowId;
+    private readonly Action<string> _reportError;
     private readonly OpenHarmonyInputDiagnostics? _diagnostics =
         AvaloniaLocator.Current.GetService<OpenHarmonyInputDiagnostics>();
     private TextInputMethodClient? _client;
@@ -32,10 +31,18 @@ internal sealed unsafe class NativeTextInput(
     private bool _updatingPreview;
     private Rect _cursor;
 
+    public NativeTextInput(SurfaceTopLevel surface, Func<int> getWindowId, Action<string> reportError)
+    {
+        _surface = surface;
+        _getWindowId = getWindowId;
+        _reportError = reportError;
+    }
+
     public void SetClient(TextInputMethodClient? client)
     {
-        if (ReferenceEquals(_client, client))
+        if (_disposed || ReferenceEquals(_client, client))
             return;
+        CancelAttachRequest();
         if (_client is { } previous)
         {
             previous.SelectionChanged -= UpdateSelection;
@@ -53,7 +60,15 @@ internal sealed unsafe class NativeTextInput(
         client.SurroundingTextChanged += UpdateSelection;
         client.TextViewVisualChanged += UpdateSelection;
         client.InputPaneActivationRequested += ShowKeyboard;
-        TryAttach();
+        RequestAttach();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        SetClient(null);
+        _disposed = true;
     }
 
     public void SetOptions(TextInputOptions options)
@@ -84,23 +99,8 @@ internal sealed unsafe class NativeTextInput(
             UpdateCursor(session.Proxy);
     }
 
-    private void TryAttach()
+    private int Attach(int windowId)
     {
-        try
-        {
-            Attach();
-        }
-        catch (Exception error)
-        {
-            reportError($"Could not attach the HarmonyOS input method. {error.Message}");
-        }
-    }
-
-    private void Attach()
-    {
-        var windowId = getWindowId();
-        if (windowId <= 0)
-            return;
         var editor = InputMethodApi.OH_TextEditorProxy_Create();
         if (editor == 0)
             throw new InvalidOperationException("OH_TextEditorProxy_Create failed.");
@@ -130,7 +130,11 @@ internal sealed unsafe class NativeTextInput(
             options = InputMethodApi.OH_AttachOptions_Create(1);
             if (options == 0)
                 throw new InvalidOperationException("OH_AttachOptions_Create failed.");
-            Check(InputMethodApi.OH_InputMethodController_Attach(editor, options, out var proxy));
+            var result = InputMethodApi.OH_InputMethodController_Attach(editor, options, out var proxy);
+            if (result != 0)
+                return result;
+            if (proxy == 0)
+                throw new InvalidOperationException("OH_InputMethodController_Attach returned an empty proxy.");
             session.Proxy = proxy;
             session.Options = options;
             _session = session;
@@ -138,6 +142,7 @@ internal sealed unsafe class NativeTextInput(
             _diagnostics?.Report($"IME attached: window {windowId}");
             NotifySelection(session);
             UpdateCursor(proxy);
+            return result;
         }
         finally
         {
@@ -162,15 +167,21 @@ internal sealed unsafe class NativeTextInput(
         InputMethodApi.OH_AttachOptions_Destroy(session.Options);
         InputMethodApi.OH_TextEditorProxy_Destroy(session.Editor);
         if (result != 0)
-            reportError($"Could not detach the HarmonyOS input method (error {result}).");
+            _reportError($"Could not detach the HarmonyOS input method (error {result}).");
     }
 
     private void ShowKeyboard(object? sender, EventArgs args)
     {
+        if (!_inputMethodActive || _disposed)
+            return;
         if (_session is { Proxy: not 0 } session)
-            InputMethodApi.OH_InputMethodProxy_ShowKeyboard(session.Proxy);
-        else
-            TryAttach();
+        {
+            var result = InputMethodApi.OH_InputMethodProxy_ShowKeyboard(session.Proxy);
+            if (result != 0)
+                _reportError($"OH_InputMethodProxy_ShowKeyboard returned HarmonyOS input method error {result}.");
+            return;
+        }
+        RequestAttach();
     }
 
     private void UpdateSelection(object? sender, EventArgs args)
@@ -314,7 +325,7 @@ internal sealed unsafe class NativeTextInput(
     }
 
     private void ReportInputFailure(Exception error) =>
-        reportError($"Could not process the HarmonyOS input method event. {error.GetType().Name}");
+        _reportError($"Could not process the HarmonyOS input method event. {error.GetType().Name}");
 
     private int UpdatePreview(Session session, string value, int start, int end)
     {
