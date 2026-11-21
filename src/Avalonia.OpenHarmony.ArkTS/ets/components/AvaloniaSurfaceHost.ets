@@ -6,6 +6,7 @@ class SurfaceController extends XComponentController {
   scale: number = 1;
   offsetX: number = 0;
   offsetY: number = 0;
+  windowKey: number = 0;
   private mouseButtons: number = 0;
   private mouseX: number = 0;
   private mouseY: number = 0;
@@ -18,14 +19,18 @@ class SurfaceController extends XComponentController {
   }
 
   onSurfaceChanged(surfaceId: string, rect: SurfaceRect): void {
-    if (rect.surfaceWidth <= 0 || rect.surfaceHeight <= 0) {
+    if (this.surfaceId !== surfaceId || rect.surfaceWidth <= 0 || rect.surfaceHeight <= 0) {
       return;
     }
     try {
       this.scale = this.readScale();
       this.offsetX = rect.offsetX ?? 0;
       this.offsetY = rect.offsetY ?? 0;
-      bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale);
+      if (this.windowKey > 0) {
+        bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale, this.windowKey);
+      } else {
+        bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale);
+      }
       this.geometryChanged();
     } catch (error) {
       hilog.error(0x0202, 'AvaloniaOHOS', '%{public}s', (error as Error).message);
@@ -173,9 +178,11 @@ class SurfaceController extends XComponentController {
 
 @Component
 export struct AvaloniaSurfaceHost {
+  @Prop windowKey: number = 0;
   private surface: SurfaceController = new SurfaceController();
 
   aboutToAppear(): void {
+    this.surface.windowKey = this.windowKey;
     this.surface.readScale = (): number => this.getUIContext().vp2px(1);
     this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
   }

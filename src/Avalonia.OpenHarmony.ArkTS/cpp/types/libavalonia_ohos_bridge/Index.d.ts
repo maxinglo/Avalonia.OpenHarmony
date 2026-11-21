@@ -13,8 +13,13 @@ export const setSurfaceOffset: (surface: string, x: number, y: number) => void;
 export const setAvoidArea: (kind: number, rects: Int32Array) => void;
 export const setWindowInsetProperties: (edgeToEdge: boolean, hasColor: boolean, color: number) => void;
 export const clearWindowInsets: () => void;
+export const reportChildFrame: (key: number, windowId: number, displayId: number, x: number, y: number,
+                                width: number, height: number) => void;
+export const reportChildEvent: (key: number, event: number) => void;
+export const requestChildClose: (key: number) => Promise<boolean>;
 export const requestBack: () => boolean;
-export const updateSurface: (surfaceId: string, width: number, height: number, scaling: number) => void;
+export const updateSurface: (surfaceId: string, width: number, height: number, scaling: number,
+                             childWindowKey?: number) => void;
 export const closeSurface: (surfaceId: string) => void;
 export const touch: (surfaceId: string, contact: number, phase: number, physicalX: number, physicalY: number) => void;
 export const pointer: (surfaceId: string, phase: number, button: number, physicalX: number, physicalY: number,
