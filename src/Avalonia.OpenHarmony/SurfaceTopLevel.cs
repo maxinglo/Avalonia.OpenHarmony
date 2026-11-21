@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Input.Raw;
 using Avalonia.Input.TextInput;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Platform.Surfaces;
 using Avalonia.Rendering.Composition;
 
@@ -17,17 +18,21 @@ internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatfo
     private readonly TouchDevice _touch = new();
     private readonly IKeyboardDevice _keyboard = AvaloniaLocator.Current.GetRequiredService<IKeyboardDevice>();
     private readonly NativeTextInput? _textInput;
+    private readonly ILauncher? _launcher;
+    private readonly IStorageProvider? _storageProvider;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private IInputRoot? _inputRoot;
     private PixelSize _pixelSize;
     private IntPtr _pixels;
 
     public SurfaceTopLevel(long surface, Compositor compositor, OpenHarmonyHost.PresentFrame present,
-        Func<int>? getInputWindowId, Action<string> reportError)
+        Func<int>? getInputWindowId, Action<string> reportError, ILauncher? launcher, IStorageProvider? storageProvider)
     {
         Surface = surface;
         Compositor = compositor;
         _present = present;
+        _launcher = launcher;
+        _storageProvider = storageProvider;
         if (getInputWindowId is not null)
             _textInput = new(this, getInputWindowId, reportError);
         Surfaces = [this];
@@ -124,8 +129,16 @@ internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatfo
     public IPopupImpl? CreatePopup() => null;
     public void SetTransparencyLevelHint(IReadOnlyList<WindowTransparencyLevel> levels) { }
     public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant) { }
-    public object? TryGetFeature(Type featureType) =>
-        featureType == typeof(ITextInputMethodImpl) ? _textInput : null;
+    public object? TryGetFeature(Type featureType)
+    {
+        if (featureType == typeof(ITextInputMethodImpl))
+            return _textInput;
+        if (featureType == typeof(ILauncher))
+            return _launcher;
+        if (featureType == typeof(IStorageProvider))
+            return _storageProvider;
+        return null;
+    }
 
     public void Dispose()
     {

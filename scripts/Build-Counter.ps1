@@ -65,7 +65,7 @@ foreach ($export in @('avaoh_resize', 'avaoh_destroy', 'avaoh_touch')) {
 Copy-Item -Path (Join-Path $sample 'Hap/*') -Destination $hap -Recurse -Force
 $cpp = Join-Path $hap 'entry/src/main/cpp'
 $nativeSource = Join-Path $repository 'src/Avalonia.OpenHarmony.Native'
-Copy-Item -LiteralPath (Join-Path $nativeSource 'CMakeLists.txt'),(Join-Path $nativeSource 'bridge.cpp') -Destination $cpp -Force
+Copy-Item -Path (Join-Path $nativeSource '*') -Destination $cpp -Force
 $moduleProfilePath = Join-Path $hap 'entry/build-profile.json5'
 $moduleProfile = Get-Content -LiteralPath $moduleProfilePath -Raw | ConvertFrom-Json
 $moduleProfile.buildOption.externalNativeOptions.abiFilters = @($Abi)

@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Rendering;
 using Avalonia.Rendering.Composition;
 using Avalonia.Threading;
@@ -23,6 +24,8 @@ public sealed class OpenHarmonyHost
     private readonly PresentFrame _present;
     private readonly Action<string> _reportError;
     private readonly Func<int>? _getInputWindowId;
+    private readonly ILauncher? _launcher;
+    private readonly IStorageProvider? _storageProvider;
     private readonly SingleViewLifetime _lifetime = new();
     private Dispatcher? _dispatcher;
     private bool _stopped;
@@ -36,11 +39,19 @@ public sealed class OpenHarmonyHost
 
     public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
         Func<int>? getInputWindowId)
+        : this(configure, present, reportError, getInputWindowId, null, null)
+    {
+    }
+
+    public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
+        Func<int>? getInputWindowId, ILauncher? launcher, IStorageProvider? storageProvider)
     {
         ArgumentNullException.ThrowIfNull(configure);
         _present = present ?? throw new ArgumentNullException(nameof(present));
         _reportError = reportError ?? throw new ArgumentNullException(nameof(reportError));
         _getInputWindowId = getInputWindowId;
+        _launcher = launcher;
+        _storageProvider = storageProvider;
         new Thread(() => Run(configure))
         {
             IsBackground = true,
@@ -62,7 +73,8 @@ public sealed class OpenHarmonyHost
 
                 CloseSurface();
                 var compositor = AvaloniaLocator.Current.GetRequiredService<Compositor>();
-                _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError);
+                _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError,
+                    _launcher, _storageProvider);
                 try
                 {
                     _topLevel.Resize(width, height, scaling);

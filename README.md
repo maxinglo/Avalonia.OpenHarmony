@@ -93,7 +93,10 @@ On the Huawei_TripleFold emulator, the sample rendered and focused its text box.
 `12800008` (`IME_ERR_IMMS`). The emulator listed `com.huawei.hmos.inputmethod/InputService` as the selected x86_64
 system input method. In a separate ArkTS app, self-drawn binding returned `12800009`. Its standard ArkUI `TextInput`
 gained focus, the keyboard windows stayed at 0 × 0, and the keyboard process was absent during the check.
-System keyboard display and text entry through the HarmonyOS input method service still require a working target.
+System apps and a standard unsigned ArkUI TextInput sample later opened the keyboard successfully on the same
+emulator. The standard sample received nine characters through the system keyboard. A later cold launch of the
+Avalonia Counter also displayed the keyboard and did not reproduce `12800008`. Text insertion and deletion through
+the Avalonia IME bridge are separate device checks.
 
 ## Repository workflow
 

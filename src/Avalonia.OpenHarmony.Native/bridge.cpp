@@ -14,6 +14,7 @@
 #include <napi/native_api.h>
 #include <native_buffer/native_buffer.h>
 #include <native_window/external_window.h>
+#include "system_requests.h"
 
 namespace {
 constexpr char Tag[] = "AvaloniaOHOS";
@@ -267,6 +268,12 @@ napi_value Init(napi_env env, napi_value exports)
     const napi_property_descriptor properties[] = {
         {"configureFiles", nullptr, ConfigureFiles, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"configureInputMethod", nullptr, ConfigureInputMethod, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"registerSystemRequests", nullptr, AvaloniaOpenHarmony::RegisterSystemRequests, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
+        {"unregisterSystemRequests", nullptr, AvaloniaOpenHarmony::UnregisterSystemRequests, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
+        {"completeSystemRequest", nullptr, AvaloniaOpenHarmony::CompleteSystemRequest, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
         {"updateSurface", nullptr, UpdateSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"closeSurface", nullptr, CloseSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"touch", nullptr, Touch, nullptr, nullptr, nullptr, napi_default, nullptr}

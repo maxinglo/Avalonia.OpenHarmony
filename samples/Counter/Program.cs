@@ -1,5 +1,9 @@
 using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.OpenHarmony;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using System.Runtime.InteropServices;
 
 namespace Counter;
@@ -10,7 +14,8 @@ public static partial class Program
     private static readonly Lazy<OpenHarmonyHost> Host = new(() =>
     {
         CounterApp.Trace = Report;
-        return new OpenHarmonyHost(AppBuilder.Configure<CounterApp>, Present, Report, GetInputWindowId);
+        return new OpenHarmonyHost(AppBuilder.Configure<CounterApp>, Present, Report, GetInputWindowId,
+            new OpenHarmonyLauncher(OpenHarmonySystemRequests.RequestAsync), null);
     });
 
     [UnmanagedCallersOnly(EntryPoint = "avaoh_resize")]
@@ -47,22 +52,48 @@ public static partial class Program
         CounterApp.Trace = message =>
         {
             Console.WriteLine(message);
-            clicked.TrySetResult(message == "Count: 1");
+            if (message == "Count: 1")
+                clicked.TrySetResult(true);
         };
+        var launchRequests = 0;
+        var launcher = new OpenHarmonyLauncher((operation, argument) =>
+        {
+            if (operation != "launcher.uri" || argument != "https://avaloniaui.net/")
+                throw new InvalidOperationException("Unexpected launcher request.");
+            launchRequests++;
+            return Task.FromResult(new OpenHarmonySystemResult(string.Empty, null));
+        });
         var host = new OpenHarmonyHost(AppBuilder.Configure<CounterApp>,
             (_, pixels, width, height, rowBytes) =>
             {
                 if (pixels != IntPtr.Zero && width == 480 && height == 300 && rowBytes == 1920)
                     rendered.TrySetResult(true);
-            }, Console.Error.WriteLine);
+            }, Console.Error.WriteLine, null, launcher, null);
         host.UpdateSurface(1, 480, 300, 1);
         await rendered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         host.Touch(1, 0, TouchPhase.Begin, 60, 85);
         host.Touch(1, 0, TouchPhase.End, 60, 85);
         if (!await clicked.Task.WaitAsync(TimeSpan.FromSeconds(10)))
             throw new InvalidOperationException("Touch did not activate the Avalonia button.");
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            var comboBox = CounterApp.PopupSelector
+                ?? throw new InvalidOperationException("The Counter view did not create its ComboBox.");
+            comboBox.IsDropDownOpen = true;
+            var root = TopLevel.GetTopLevel(comboBox)
+                ?? throw new InvalidOperationException("The ComboBox is not attached to the surface.");
+            if (!root.GetVisualDescendants().OfType<OverlayPopupHost>().Any())
+                throw new InvalidOperationException("The ComboBox has no in-surface popup host.");
+            comboBox.IsDropDownOpen = false;
+        });
+        var actualLauncher = await Dispatcher.UIThread.InvokeAsync(() =>
+            TopLevel.GetTopLevel(CounterApp.PopupSelector)!.Launcher);
+        if (!await actualLauncher.LaunchUriAsync(new Uri("https://avaloniaui.net/")) ||
+            await actualLauncher.LaunchUriAsync(new Uri("/relative", UriKind.Relative)) ||
+            launchRequests != 1)
+            throw new InvalidOperationException("The launcher did not handle supported and relative URIs correctly.");
         host.DestroySurface(1);
-        Console.WriteLine("An Avalonia surface rendered and received touch.");
+        Console.WriteLine("An Avalonia surface rendered, received touch, opened an overlay popup, and routed a launcher request.");
     }
 #endif
 }
