@@ -177,6 +177,8 @@ public sealed partial class OpenHarmonyHost
 
     private void CloseSurface()
     {
+        CloseAccessibility();
+        _accessibilityRegistration = 0;
         if (_root != null)
         {
             if (_rendering)

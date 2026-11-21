@@ -68,6 +68,20 @@ public static partial class Program
             Host.Value.HardwareInputBlur(surface);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_accessibility_configure")]
+    public static void ConfigureAccessibility(long surface, long registration, int enabled)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.SetAccessibility(surface, registration, enabled != 0);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_accessibility_invoke")]
+    public static void InvokeAccessibility(long surface, long registration, int id)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.InvokeAccessibility(surface, registration, id);
+    }
+
     [LibraryImport("libavalonia_ohos_bridge.so", EntryPoint = "avaoh_present")]
     private static partial void Present(long surface, IntPtr pixels, int width, int height, int rowBytes);
 

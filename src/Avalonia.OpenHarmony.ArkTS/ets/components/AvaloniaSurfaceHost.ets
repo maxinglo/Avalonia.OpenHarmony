@@ -1,4 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { accessibility } from '@kit.AccessibilityKit';
+import { NodeContent } from '@kit.ArkUI';
 import bridge from 'libavalonia_ohos_bridge.so';
 
 class SurfaceController extends XComponentController {
@@ -173,11 +175,51 @@ class SurfaceController extends XComponentController {
 
 @Component
 export struct AvaloniaSurfaceHost {
+  @Prop enableAccessibility: boolean = false;
   private surface: SurfaceController = new SurfaceController();
+  private semantics: NodeContent = new NodeContent();
+  private accessibilityActive: boolean = false;
+  private accessibilityStatus: number = -2;
+  private accessibilityChanged = (enabled: boolean): void => {
+    this.accessibilityActive = enabled;
+    if (enabled) {
+      this.updateSurfaceOrigin();
+    } else {
+      this.publishAccessibility(0, 0);
+    }
+  };
 
   aboutToAppear(): void {
     this.surface.readScale = (): number => this.getUIContext().vp2px(1);
     this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
+    if (this.enableAccessibility) {
+      this.accessibilityActive = accessibility.isOpenAccessibilitySync();
+      accessibility.on('accessibilityStateChange', this.accessibilityChanged);
+    }
+  }
+
+  aboutToDisappear(): void {
+    if (this.enableAccessibility) {
+      accessibility.off('accessibilityStateChange', this.accessibilityChanged);
+      this.accessibilityChanged(false);
+    }
+  }
+
+  private publishAccessibility(x: number, y: number): void {
+    const surfaceId = this.surface.surfaceId;
+    if (!surfaceId || (!this.accessibilityActive && this.accessibilityStatus !== 0)) {
+      return;
+    }
+    try {
+      const status = bridge.configureAccessibility(surfaceId, this.accessibilityActive,
+        this.accessibilityActive ? this.semantics : null, x, y);
+      if (status !== this.accessibilityStatus) {
+        hilog.info(0x0202, 'AvaloniaOHOS', 'Accessibility registration: %{public}d', status);
+      }
+      this.accessibilityStatus = this.accessibilityActive ? status : -2;
+    } catch (error) {
+      hilog.warn(0x0202, 'AvaloniaOHOS', 'Accessibility: %{public}s', (error as Error).message);
+    }
   }
 
   private updateSurfaceOrigin(): void {
@@ -187,6 +229,8 @@ export struct AvaloniaSurfaceHost {
         const info = this.getUIContext().getComponentUtils().getRectangleById('avalonia-surface');
         bridge.setSurfaceOffset(surfaceId, Math.round(info.windowOffset.x + this.surface.offsetX),
           Math.round(info.windowOffset.y + this.surface.offsetY));
+        this.publishAccessibility(Math.round(info.screenOffset.x + this.surface.offsetX),
+          Math.round(info.screenOffset.y + this.surface.offsetY));
       } catch (error) {
         hilog.warn(0x0202, 'AvaloniaOHOS', 'Surface position: %{public}s', (error as Error).message);
       }
@@ -214,6 +258,11 @@ export struct AvaloniaSurfaceHost {
         .onKeyEvent((event: KeyEvent): boolean => this.surface.onHardwareKey(event))
         .onBlur(() => this.surface.onHardwareBlur())
         .onAreaChange((_previous: Area, _current: Area) => this.updateSurfaceOrigin())
+      if (this.enableAccessibility) {
+        Stack() {
+          ContentSlot(this.semantics)
+        }.width('100%').height('100%').hitTestBehavior(HitTestMode.None)
+      }
     }.width('100%').height('100%')
   }
 }

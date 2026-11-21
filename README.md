@@ -128,6 +128,28 @@ unknown when HarmonyOS reports zero reserved area. Visibility and color commands
 and window modes. Layout follows the actual XComponent
 geometry. [HarmonyOS window system bars](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
 
+### Accessibility
+
+Counter contains an experimental accessibility option, disabled by default. When that option and the HarmonyOS
+accessibility service are enabled, an independent, non-drawing ArkUI node exposes the semantics beside the XComponent.
+The ArkTS host provides the physical screen origin of the surface. The Avalonia dispatcher publishes a snapshot of
+visible
+automation peers with roles, names, bounds,
+enabled state, focus state, and Invoke capability. ArkUI queries read the cached snapshot. Invoke is dispatched back to
+Avalonia, where the host checks the active surface registration and node again before calling `IInvokeProvider`.
+
+Set `enableAccessibility: true` on `AvaloniaSurfaceHost` and enable a HarmonyOS accessibility service.
+Application libraries opt in by exporting `avaoh_accessibility_configure` and `avaoh_accessibility_invoke`, as Counter
+does.
+The bridge clears the snapshot when accessibility is disabled or the surface is replaced. Scroll, text editing, value
+changes through accessibility actions, and end-to-end ScreenReader acceptance remain outside this first implementation.
+[HarmonyOS XComponent accessibility guide](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/ndk-accessibility-xcomponent/)
+
+On the API 26 x86_64 emulator, a standalone CustomNode probe registered its native provider and answered a system
+accessibility query while the original XComponent controller still opened its NativeWindow and received ordinary
+touch. A separate managed probe verified names, physical bounds, focus, disabled state, and Invoke on the actual
+AudioSynx Arc view. The combined Avalonia device path still needs a HAP acceptance run.
+
 ## Compatibility
 
 The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its scope is a

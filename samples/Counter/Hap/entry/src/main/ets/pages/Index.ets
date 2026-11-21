@@ -5,6 +5,7 @@ import { AvaloniaSurfaceHost } from '../components/AvaloniaSurfaceHost';
 @Entry
 @Component
 struct CounterPage {
+  private readonly enableAccessibility: boolean = false;
   private reportPastePosition(): void {
     try {
       const bounds = this.getUIContext().getComponentUtils().getRectangleById('system-paste');
@@ -22,7 +23,7 @@ struct CounterPage {
 
   build() {
     Column() {
-      AvaloniaSurfaceHost().layoutWeight(1)
+      AvaloniaSurfaceHost({ enableAccessibility: this.enableAccessibility }).layoutWeight(1)
       Row() {
         PasteButton()
           .id('system-paste')

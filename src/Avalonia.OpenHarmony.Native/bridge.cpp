@@ -17,6 +17,8 @@
 #include "system_requests.h"
 #include "platform_displays.h"
 
+#include "accessibility.h"
+
 namespace {
 constexpr char Tag[] = "AvaloniaOHOS";
 constexpr unsigned LogDomain = 0x0202;
@@ -46,6 +48,8 @@ struct AppLibrary {
         clearWindowInsets = reinterpret_cast<decltype(clearWindowInsets)>(dlsym(handle, "avaoh_clear_window_insets"));
         requestBack = reinterpret_cast<decltype(requestBack)>(dlsym(handle, "avaoh_request_back"));
         paste = reinterpret_cast<decltype(paste)>(dlsym(handle, "avaoh_paste"));
+        accessibilityConfigure = reinterpret_cast<decltype(accessibilityConfigure)>(dlsym(handle, "avaoh_accessibility_configure"));
+        accessibilityInvoke = reinterpret_cast<decltype(accessibilityInvoke)>(dlsym(handle, "avaoh_accessibility_invoke"));
     }
 
     // Keep the NativeAOT library loaded for the process lifetime.
@@ -66,6 +70,8 @@ struct AppLibrary {
     void (*clearWindowInsets)() = nullptr;
     int32_t (*requestBack)() = nullptr;
     void (*paste)() = nullptr;
+    accessibility::Configure accessibilityConfigure = nullptr;
+    accessibility::Invoke accessibilityInvoke = nullptr;
 
     bool ready() const { return resize != nullptr && destroy != nullptr && touch != nullptr; }
 };
@@ -331,8 +337,10 @@ napi_value UpdateSurface(napi_env env, napi_callback_info info)
             }
         }
     }
-    if (oldToken != 0)
+    if (oldToken != 0) {
+        accessibility::Detach(oldToken);
         app.destroy(oldToken);
+    }
     if (token == 0) {
         OH_LOG_Print(LOG_APP, LOG_ERROR, LogDomain, Tag, "NativeWindow setup failed: %{public}d", status);
         return Error(env, "Could not configure the XComponent native window.");
@@ -357,9 +365,43 @@ napi_value CloseSurface(napi_env env, napi_callback_info info)
             ResetSurface();
         }
     }
-    if (token != 0 && App().ready())
+    if (token != 0 && App().ready()) {
+        accessibility::Detach(token);
         App().destroy(token);
+    }
     return nullptr;
+}
+
+napi_value ConfigureAccessibility(napi_env env, napi_callback_info info)
+{
+    size_t count = 5;
+    napi_value args[5];
+    uint64_t surfaceId;
+    bool enabled;
+    int32_t screenX, screenY;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 5 ||
+        !ParseSurfaceId(env, args[0], surfaceId) || napi_get_value_bool(env, args[1], &enabled) != napi_ok ||
+        napi_get_value_int32(env, args[3], &screenX) != napi_ok || napi_get_value_int32(env, args[4], &screenY) != napi_ok)
+        return Error(env, "Invalid accessibility surface or state.");
+    int64_t token;
+    {
+        std::lock_guard lock(surfaceMutex);
+        token = surface.id == surfaceId ? surface.token : 0;
+    }
+    int32_t result = -1;
+    if (token != 0) {
+        if (!enabled) {
+            accessibility::Detach(token);
+            result = 0;
+        } else {
+            auto& app = App();
+            result = accessibility::Attach(env, args[2], token, screenX, screenY,
+                app.accessibilityConfigure, app.accessibilityInvoke);
+        }
+    }
+    napi_value value;
+    napi_create_int32(env, result, &value);
+    return value;
 }
 
 napi_value Touch(napi_env env, napi_callback_info info)
@@ -508,6 +550,7 @@ napi_value Init(napi_env env, napi_value exports)
         {"requestPaste", nullptr, RequestPaste, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"updateSurface", nullptr, UpdateSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"closeSurface", nullptr, CloseSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"configureAccessibility", nullptr, ConfigureAccessibility, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"touch", nullptr, Touch, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pointer", nullptr, Pointer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"key", nullptr, Key, nullptr, nullptr, nullptr, napi_default, nullptr},
