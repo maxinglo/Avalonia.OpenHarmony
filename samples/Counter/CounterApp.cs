@@ -46,7 +46,9 @@ public sealed class CounterApp : Application
                             Foreground = Brushes.Black
                         },
                         button,
-                        text
+                        text,
+                        new TextBox { PlaceholderText = "Type here", MaxWidth = 400,
+                            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left }
                     }
                 }
             };

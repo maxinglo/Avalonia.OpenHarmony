@@ -10,7 +10,7 @@ public static partial class Program
     private static readonly Lazy<OpenHarmonyHost> Host = new(() =>
     {
         CounterApp.Trace = Report;
-        return new OpenHarmonyHost(AppBuilder.Configure<CounterApp>, Present, Report);
+        return new OpenHarmonyHost(AppBuilder.Configure<CounterApp>, Present, Report, GetInputWindowId);
     });
 
     [UnmanagedCallersOnly(EntryPoint = "avaoh_resize")]
@@ -36,6 +36,9 @@ public static partial class Program
 
     [LibraryImport("libavalonia_ohos_bridge.so", EntryPoint = "avaoh_report", StringMarshalling = StringMarshalling.Utf8)]
     private static partial void Report(string message);
+
+    [LibraryImport("libavalonia_ohos_bridge.so", EntryPoint = "avaoh_ime_window_id")]
+    private static partial int GetInputWindowId();
 #else
     public static async Task Main()
     {

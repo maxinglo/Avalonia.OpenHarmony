@@ -1,3 +1,4 @@
+#include <atomic>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -59,6 +60,7 @@ struct Surface {
 std::mutex surfaceMutex;
 Surface surface;
 int64_t nextToken = 0;
+std::atomic<int32_t> inputWindowId{0};
 
 void ResetSurface()
 {
@@ -107,6 +109,18 @@ napi_value ConfigureFiles(napi_env env, napi_callback_info info)
     if (result < 0 || closed != 0 || setenv("XDG_CACHE_HOME", filesDirectory, 0) != 0 ||
         setenv("FONTCONFIG_FILE", configuration.c_str(), 0) != 0)
         return Error(env, "Cannot configure the Avalonia system fonts.");
+    return nullptr;
+}
+
+napi_value ConfigureInputMethod(napi_env env, napi_callback_info info)
+{
+    size_t count = 1;
+    napi_value argument;
+    int32_t windowId;
+    if (napi_get_cb_info(env, info, &count, &argument, nullptr, nullptr) != napi_ok || count != 1 ||
+        napi_get_value_int32(env, argument, &windowId) != napi_ok || windowId <= 0)
+        return Error(env, "Provide a valid HarmonyOS window ID for the input method.");
+    inputWindowId.store(windowId, std::memory_order_relaxed);
     return nullptr;
 }
 
@@ -252,6 +266,7 @@ napi_value Init(napi_env env, napi_value exports)
 {
     const napi_property_descriptor properties[] = {
         {"configureFiles", nullptr, ConfigureFiles, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"configureInputMethod", nullptr, ConfigureInputMethod, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"updateSurface", nullptr, UpdateSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"closeSurface", nullptr, CloseSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"touch", nullptr, Touch, nullptr, nullptr, nullptr, napi_default, nullptr}
@@ -313,4 +328,9 @@ extern "C" void avaoh_present(int64_t token, const char* pixels, int32_t width, 
 extern "C" void avaoh_report(const char* message)
 {
     OH_LOG_Print(LOG_APP, LOG_INFO, LogDomain, Tag, "%{public}s", message);
+}
+
+extern "C" int32_t avaoh_ime_window_id()
+{
+    return inputWindowId.load(std::memory_order_relaxed);
 }

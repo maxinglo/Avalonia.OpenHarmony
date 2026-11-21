@@ -4,8 +4,8 @@ Avalonia.OpenHarmony is an independent adapter for hosting Avalonia 12.1.6 views
 Avalonia lays out, styles and draws the controls. ArkTS supplies the surface lifecycle and touch events. A C++ N-API
 module presents Skia's CPU-rendered framebuffer through the HarmonyOS NativeWindow API.
 
-The Counter sample uses Avalonia's Simple theme, a text block and a button. Tapping **Add one** updates the label and
-writes the new count to hilog.
+The Counter sample uses Avalonia's Simple theme, a button and a text box. Tapping **Add one** updates the label and
+writes the new count to hilog. The **Type here** field exercises the system keyboard integration.
 
 ## Build the Counter sample
 
@@ -55,12 +55,24 @@ are queued to that dispatcher. The frame callback receives a premultiplied RGBA8
 valid for the duration of the callback. Surface IDs remain strings in ArkTS, and C++ assigns independent monotonic
 identifiers to surface instances. Touch coordinates sent to the C# host are physical pixels.
 
+### System input method
+
+Pass a native window ID provider as the fourth constructor argument to enable the HarmonyOS input method. Call
+`configureInputMethod(windowStage.getMainWindowSync().getWindowProperties().id)` from ArkTS before loading the
+XComponent page. The Counter application reads the ID through `avaoh_ime_window_id`. The backend attaches a native
+editor when an Avalonia text client gains focus and detaches on focus loss or surface destruction.
+
+The backend forwards committed UTF-16 text, deletion, selection changes, and Enter to Avalonia. It sends the caret and
+surrounding text to the input method for standard fields. Avalonia's sensitive-text and password options suppress
+surrounding-text
+sharing. [HarmonyOS native input method guide](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/use-inputmethod-in-custom-edit-box-ndk/)
+
 ## Compatibility
 
-The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its initial scope
-is a single embedded Avalonia view, software rendering, surface recreation, resizing and touch. Platform integration for
-native text input, system clipboard, pointing devices, accessibility, multiple windows and accelerated rendering is
-pending. Applications own their service and settings lifetimes.
+The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its scope is a
+single embedded Avalonia view, software rendering, surface recreation, resizing, touch, and optional system text input.
+Composition preview, direct hardware keyboard events, system clipboard, pointing devices, accessibility, multiple
+windows and accelerated rendering are pending. Applications own their service and settings lifetimes.
 
 The graphics preparation script pins and checks the two NuGet native asset packages and the auxiliary libraries supplied
 by the pinned OpenHarmony .NET checkout. HarmonyOS supplies `libc.so`. See the distribution and license details
@@ -68,8 +80,23 @@ in [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## Emulator verification
 
-The API 26 x86_64 Counter HAP was installed and launched on the Huawei_TripleFold local emulator. The native bridge presented an Avalonia frame and tapping **Add one** updated the counter to 1.
+The API 26 x86_64 Counter HAP was installed and launched on the Huawei_TripleFold local emulator. The native bridge
+presented an Avalonia frame and tapping **Add one** updated the counter to 1.
+
+### Input method verification
+
+The IME sample builds as an API 26 x86_64 HAP with NativeAOT. A Windows probe used a C ABI test library that enforced
+the SDK's 15 editor callbacks. It verified touch focus, window ID propagation, UTF-16 insertion and deletion, selection
+replacement, caret and surrounding-text queries, and detachment when the surface closed.
+
+On the Huawei_TripleFold emulator, the sample rendered and focused its text box. The native attach call returned
+`12800008` (`IME_ERR_IMMS`). The emulator listed `com.huawei.hmos.inputmethod/InputService` as the selected x86_64
+system input method. In a separate ArkTS app, self-drawn binding returned `12800009`. Its standard ArkUI `TextInput`
+gained focus, the keyboard windows stayed at 0 × 0, and the keyboard process was absent during the check.
+System keyboard display and text entry through the HarmonyOS input method service still require a working target.
 
 ## Repository workflow
 
-Develop features and fixes on separate branches and review them in pull requests to main. Promote selected main commits to preview in a release pull request. Update stable after preview validation. Use a hotfix branch for urgent stable fixes and bring the fix back to main.
+Develop features and fixes on separate branches and review them in pull requests to main. Promote selected main commits
+to preview in a release pull request. Update stable after preview validation. Use a hotfix branch for urgent stable
+fixes and bring the fix back to main.

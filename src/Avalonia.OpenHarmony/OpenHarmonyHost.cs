@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Embedding;
 using Avalonia.Controls.Platform;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -21,6 +22,7 @@ public sealed class OpenHarmonyHost
     private readonly Queue<Action> _pending = new();
     private readonly PresentFrame _present;
     private readonly Action<string> _reportError;
+    private readonly Func<int>? _getInputWindowId;
     private readonly SingleViewLifetime _lifetime = new();
     private Dispatcher? _dispatcher;
     private bool _stopped;
@@ -28,10 +30,17 @@ public sealed class OpenHarmonyHost
     private SurfaceTopLevel? _topLevel;
 
     public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError)
+        : this(configure, present, reportError, null)
+    {
+    }
+
+    public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
+        Func<int>? getInputWindowId)
     {
         ArgumentNullException.ThrowIfNull(configure);
         _present = present ?? throw new ArgumentNullException(nameof(present));
         _reportError = reportError ?? throw new ArgumentNullException(nameof(reportError));
+        _getInputWindowId = getInputWindowId;
         new Thread(() => Run(configure))
         {
             IsBackground = true,
@@ -53,7 +62,7 @@ public sealed class OpenHarmonyHost
 
                 CloseSurface();
                 var compositor = AvaloniaLocator.Current.GetRequiredService<Compositor>();
-                _topLevel = new SurfaceTopLevel(surface, compositor, _present);
+                _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError);
                 try
                 {
                     _topLevel.Resize(width, height, scaling);
@@ -147,6 +156,7 @@ public sealed class OpenHarmonyHost
     {
         var locator = AvaloniaLocator.CurrentMutable;
         locator.Bind<IPlatformSettings>().ToSingleton<DefaultPlatformSettings>();
+        locator.Bind<IKeyboardDevice>().ToSingleton<KeyboardDevice>();
         locator.Bind<PlatformHotkeyConfiguration>().ToSingleton<PlatformHotkeyConfiguration>();
         locator.Bind<ICursorFactory>().ToSingleton<CursorFactory>();
         locator.Bind<IRenderLoop>().ToConstant(RenderLoop.FromTimer(new UiThreadRenderTimer(60)));
