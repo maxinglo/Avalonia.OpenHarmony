@@ -36,15 +36,18 @@ export class ChildWindows {
   private stage: window.WindowStage;
   private main: window.Window;
   private enableAccessibility: boolean;
+  private enableInboundDrop: boolean;
   private windows: Map<number, window.Window> = new Map();
   private closing: Map<number, Promise<boolean>> = new Map();
   private modalWindows: Set<number> = new Set();
   private active: boolean = true;
 
-  constructor(stage: window.WindowStage, main: window.Window, enableAccessibility: boolean) {
+  constructor(stage: window.WindowStage, main: window.Window, enableAccessibility: boolean,
+    enableInboundDrop: boolean = false) {
     this.stage = stage;
     this.main = main;
     this.enableAccessibility = enableAccessibility;
+    this.enableInboundDrop = enableInboundDrop;
     bridge.reportChildEvent(0, ChildEvent.StageCreated);
   }
 
@@ -148,6 +151,7 @@ export class ChildWindows {
       const storage = new LocalStorage();
       storage.setOrCreate<number>('avaloniaChildWindowKey', key);
       storage.setOrCreate<boolean>('avaloniaChildAccessibility', this.enableAccessibility);
+      storage.setOrCreate<boolean>('avaloniaChildInboundDrop', this.enableInboundDrop);
       await child.loadContent(childWindowPage, storage);
       if (!this.active || this.windows.get(key) !== child) {
         await this.close(key);

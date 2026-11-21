@@ -23,7 +23,7 @@ struct CounterPage {
 
   build() {
     Column() {
-      AvaloniaSurfaceHost({ enableAccessibility: this.enableAccessibility }).layoutWeight(1)
+      AvaloniaSurfaceHost({ enableAccessibility: this.enableAccessibility, enableInboundDrop: true }).layoutWeight(1)
       Row() {
         PasteButton()
           .id('system-paste')

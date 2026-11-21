@@ -150,6 +150,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     public void Hide()
     {
         // Reject native input as soon as Avalonia hides the window.
+        Surface.CancelInboundDrag();
         if (!IsStage)
             ReportVisible(false);
         _avaloniaVisible = false;
@@ -170,6 +171,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     {
         if (_enabled && !enable)
         {
+            Surface.CancelInboundDrag();
             Surface.CancelHardwarePointer();
             LostFocus?.Invoke();
         }
@@ -277,6 +279,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         if (_disposed)
             return;
         _framebufferAvailable = false;
+        Surface.CancelInboundDrag();
         RefreshActivation();
     }
 
@@ -285,6 +288,8 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         if (_closeRequested || _disposed || _visible == visible)
             return;
         _visible = visible;
+        if (!visible)
+            Surface.CancelInboundDrag();
         RefreshActivation();
         if (visible)
         {
@@ -363,6 +368,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         if (!_closeRequested)
         {
             _closeRequested = true;
+            Surface.CancelInboundDrag();
             if (_shownModally && _owner is { } owner)
             {
                 // Avalonia clears Owner after Dispose returns, before async native destruction.
@@ -415,7 +421,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         if (AcceptsInput || args is RawPointerEventArgs
             {
                 Type: RawPointerEventType.CancelCapture or RawPointerEventType.LeaveWindow
-            })
+            } || args is RawDragEvent { Type: RawDragEventType.DragLeave })
             Input?.Invoke(args);
         else if (CanRender && !_enabled)
             GotInputWhenDisabled?.Invoke();

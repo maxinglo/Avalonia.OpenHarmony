@@ -57,6 +57,7 @@ public sealed partial class OpenHarmonyHost
                 break;
         }
         _topLevel?.SetInputMethodActive(IsInputMethodWindowActive);
+        CancelUnavailableInboundDrag();
     });
 
     /// <summary>Reports the platform theme and notifies Avalonia when it changes.</summary>

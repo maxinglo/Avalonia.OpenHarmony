@@ -69,6 +69,9 @@ Apps can host the HarmonyOS security `PasteButton` alongside the surface. In its
 `bridge.requestPaste()`. The target NativeAOT library can implement `avaoh_paste` and forward it to
 `OpenHarmonyHost.PasteToFocusedTextBox()`. [Clipboard details](docs/clipboard.md)
 
+Apps can opt into receiving plain text and read-only files from system drag and drop on embedded and
+owned window surfaces. [Drag and drop integration](docs/drag-and-drop.md)
+
 ### System input method
 
 Pass a native window ID provider as the fourth constructor argument to enable the HarmonyOS input method. Call

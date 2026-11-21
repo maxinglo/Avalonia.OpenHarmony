@@ -2,6 +2,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { accessibility } from '@kit.AccessibilityKit';
 import { NodeContent } from '@kit.ArkUI';
 import bridge from 'libavalonia_ohos_bridge.so';
+import { AvaloniaDropReceiver, avaloniaDropTypes } from './AvaloniaDropReceiver';
 
 class SurfaceController extends XComponentController {
   surfaceId: string = '';
@@ -182,7 +183,9 @@ class SurfaceController extends XComponentController {
 export struct AvaloniaSurfaceHost {
   @Prop enableAccessibility: boolean = false;
   @Prop windowKey: number = 0;
+  @Prop enableInboundDrop: boolean = false;
   private surface: SurfaceController = new SurfaceController();
+  private dropReceiver: AvaloniaDropReceiver = new AvaloniaDropReceiver();
   private semantics: NodeContent = new NodeContent();
   private accessibilityActive: boolean = false;
   private accessibilityStatus: number = -2;
@@ -206,6 +209,9 @@ export struct AvaloniaSurfaceHost {
   }
 
   aboutToDisappear(): void {
+    if (this.enableInboundDrop && this.surface.surfaceId) {
+      bridge.drag(this.surface.surfaceId, 2, 0, 0, 0, 0, '');
+    }
     if (this.enableAccessibility) {
       accessibility.off('accessibilityStateChange', this.accessibilityChanged);
       this.accessibilityChanged(false);
@@ -244,6 +250,27 @@ export struct AvaloniaSurfaceHost {
     }
   }
 
+  private receiveDrag(phase: number, event: DragEvent): void {
+    const id = this.surface.surfaceId;
+    if (!this.enableInboundDrop || !id) {
+      return;
+    }
+    if (phase === 2) {
+      bridge.drag(id, phase, 0, 0, 0, 0, '');
+      return;
+    }
+    try {
+      const component = this.getUIContext().getComponentUtils().getRectangleById('avalonia-surface');
+      const x = event.getWindowX() * this.surface.scale - component.windowOffset.x - this.surface.offsetX;
+      const y = event.getWindowY() * this.surface.scale - component.windowOffset.y - this.surface.offsetY;
+      this.dropReceiver.dispatch(id, phase, x, y, event);
+    } catch (error) {
+      bridge.drag(id, 2, 0, 0, 0, 0, '');
+      event.setResult(phase === 3 ? DragResult.DRAG_FAILED : DragResult.DROP_DISABLED);
+      hilog.warn(0x0202, 'AvaloniaOHOS', 'Could not route the system drag event');
+    }
+  }
+
   build() {
     Stack() {
       XComponent({ id: 'avalonia', type: XComponentType.SURFACE, controller: this.surface })
@@ -264,6 +291,11 @@ export struct AvaloniaSurfaceHost {
         .onAxisEvent((event: AxisEvent) => this.surface.onHardwareAxis(event))
         .onKeyEvent((event: KeyEvent): boolean => this.surface.onHardwareKey(event))
         .onBlur(() => this.surface.onHardwareBlur())
+        .allowDrop(this.enableInboundDrop ? avaloniaDropTypes : null)
+        .onDragEnter((event: DragEvent) => this.receiveDrag(0, event))
+        .onDragMove((event: DragEvent) => this.receiveDrag(1, event))
+        .onDragLeave((event: DragEvent) => this.receiveDrag(2, event))
+        .onDrop((event: DragEvent) => this.receiveDrag(3, event))
         .onAreaChange((_previous: Area, _current: Area) => this.updateSurfaceOrigin())
       if (this.enableAccessibility) {
         Stack() {

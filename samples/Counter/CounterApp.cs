@@ -119,6 +119,7 @@ public sealed partial class CounterApp : Application
                 ReportStatus($"Immersive layout requested: {insets.DisplayEdgeToEdgePreference}");
             };
 
+            var dropTarget = CounterDropTarget.Create(editor, ReportStatus);
             var content = new StackPanel
             {
                 Spacing = 16,
@@ -128,6 +129,7 @@ public sealed partial class CounterApp : Application
                     button,
                     text,
                     editor,
+                    dropTarget,
                     picker,
                     new WrapPanel { Children = { copy, open, save, folder, link, immersive } },
                     status
@@ -145,7 +147,7 @@ public sealed partial class CounterApp : Application
             border.AddHandler(InputElement.PointerWheelChangedEvent, (_, args) =>
                 Trace($"Wheel: {args.Delta.X:F2} {args.Delta.Y:F2}"),
                 RoutingStrategies.Tunnel, handledEventsToo: true);
-            ObserveTopLevel(border, ("Count button", button), ("Editor", editor), ("ComboBox", picker),
+            ObserveTopLevel(border, ("Count button", button), ("Editor", editor), ("Drop target", dropTarget), ("ComboBox", picker),
                 ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link),
                 ("Immersive", immersive));
             var surface = new Border { Child = border };

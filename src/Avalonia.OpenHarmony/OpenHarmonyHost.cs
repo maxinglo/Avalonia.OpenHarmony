@@ -184,7 +184,10 @@ public sealed partial class OpenHarmonyHost
     private void CloseSurface()
     {
         if (_topLevel is { } topLevel)
+        {
+            CancelInboundDrag(topLevel.Surface);
             CloseAccessibility(topLevel.Surface);
+        }
         if (_root != null)
         {
             if (_rendering)

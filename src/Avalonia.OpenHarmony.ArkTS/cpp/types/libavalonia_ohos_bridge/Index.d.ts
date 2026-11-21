@@ -29,4 +29,6 @@ export const pointer: (surfaceId: string, phase: number, button: number, physica
 export const key: (surfaceId: string, down: boolean, code: number, modifiers: number, unicode: number,
                    locks: number) => boolean;
 export const inputBlur: (surfaceId: string) => void;
+export const drag: (surfaceId: string, phase: number, physicalX: number, physicalY: number, modifiers: number,
+                    formats: number, payload: string) => boolean;
 import {NodeContent} from '@kit.ArkUI';

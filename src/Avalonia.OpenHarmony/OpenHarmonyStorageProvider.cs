@@ -237,6 +237,18 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
     private static bool TryMakeFileUri(string value, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Uri? uri) =>
         Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.IsFile;
 
+    internal IStorageFile? RetainDroppedFile(string value, int descriptor, ulong length)
+    {
+        if (value.Length > 4096 || !value.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ||
+            value.Any(char.IsControl) || !TryMakeFileUri(value, out var uri) ||
+            uri.Segments.Length < 2 || uri.AbsolutePath.EndsWith('/') ||
+            uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0)
+            return null;
+
+        var retained = OpenHarmonyDropFile.Retain(descriptor);
+        return retained is null ? null : new OpenHarmonyDropFile(uri, retained, length);
+    }
+
     private static List<(string Text, FilePickerFileType Type)> GetFilters(
         IReadOnlyList<FilePickerFileType>? choices,
         FilePickerFileType? suggested,

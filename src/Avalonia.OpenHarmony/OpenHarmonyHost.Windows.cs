@@ -102,10 +102,12 @@ public sealed partial class OpenHarmonyHost
         }
     }
 
-    private static bool UpdateRouteSurface(WindowRoute route, long token, int width, int height, double scaling)
+    private bool UpdateRouteSurface(WindowRoute route, long token, int width, int height, double scaling)
     {
         if (token <= 0 || (token != route.Token && token <= route.LatestToken))
             return false;
+        if (token != route.Token)
+            CancelInboundDrag(route.Token);
         Volatile.Write(ref route.Token, token);
         route.LatestToken = token;
         route.Window.ApplySurfaceGeometry(width, height, scaling);
@@ -118,6 +120,7 @@ public sealed partial class OpenHarmonyHost
             return false;
         if (route.Token == token)
         {
+            CancelInboundDrag(token);
             CloseAccessibility(token);
             Volatile.Write(ref route.Token, 0);
             route.Window.Surface.SetInputMethodActive(false);
@@ -153,6 +156,7 @@ public sealed partial class OpenHarmonyHost
     {
         if (!_children.TryGetValue(key, out var route) || route.Token != token)
             return;
+        CancelInboundDrag(token);
         CloseAccessibility(token);
         _childSurfaces.Remove(token);
         Volatile.Write(ref route.Token, 0);
@@ -211,6 +215,7 @@ public sealed partial class OpenHarmonyHost
                 break;
         }
         RefreshChildInputMethod(route);
+        CancelUnavailableInboundDrag();
     });
 
     /// <summary>Returns true if Avalonia cancels the native title-bar close. Call off the ArkTS UI thread.</summary>
@@ -258,7 +263,10 @@ public sealed partial class OpenHarmonyHost
             {
                 _closedStageToken = Math.Max(_closedStageToken, stage.LatestToken);
                 if (stage.Token > 0)
+                {
+                    CancelInboundDrag(stage.Token);
                     CloseAccessibility(stage.Token);
+                }
             }
             foreach (var child in _children.Values.ToArray())
                 child.Window.Dispose();
@@ -274,6 +282,7 @@ public sealed partial class OpenHarmonyHost
         }
         if (_children.Remove(checked((int)window.Id), out var route) && route.Token != 0)
         {
+            CancelInboundDrag(route.Token);
             CloseAccessibility(route.Token);
             _childSurfaces.Remove(route.Token);
             Volatile.Write(ref route.Token, 0);

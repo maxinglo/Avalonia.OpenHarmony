@@ -71,6 +71,16 @@ public static partial class Program
             Host.Value.HardwareInputBlur(surface);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_drag")]
+    public static unsafe int ReceiveDrag(long surface, int phase, double x, double y, int modifiers, int formats,
+        byte* payload, int length)
+    {
+        if (!Host.IsValueCreated || length is < 0 or > 1_048_576 || (length != 0 && payload == null))
+            return 0;
+        var data = System.Text.Encoding.UTF8.GetString(new ReadOnlySpan<byte>(payload, length));
+        return Host.Value.ReceiveDrag(surface, phase, x, y, modifiers, formats, data) ? 1 : 0;
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "avaoh_accessibility_configure")]
     public static void ConfigureAccessibility(long surface, long registration, int enabled)
     {

@@ -17,6 +17,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
 {
     private const long MaximumPixels = 16_777_216;
     private readonly OpenHarmonyHost.PresentFrame _present;
+    private readonly Action<string> _reportError;
     private readonly TouchDevice _touch = new();
     private readonly IKeyboardDevice _keyboard = AvaloniaLocator.Current.GetRequiredService<IKeyboardDevice>();
     private readonly NativeTextInput? _textInput;
@@ -38,6 +39,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         Surface = surface;
         Compositor = compositor;
         _present = present;
+        _reportError = reportError;
         _launcher = launcher;
         _storageProvider = storageProvider;
         _screens = screens;
@@ -174,6 +176,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
 
     public void Dispose()
     {
+        CancelInboundDrag();
         Insets.Dispose();
         _textInput?.Dispose();
         _eglWindow?.Dispose();

@@ -46,6 +46,7 @@ struct AppLibrary {
         pointer = reinterpret_cast<decltype(pointer)>(dlsym(handle, "avaoh_pointer"));
         key = reinterpret_cast<decltype(key)>(dlsym(handle, "avaoh_key"));
         inputBlur = reinterpret_cast<decltype(inputBlur)>(dlsym(handle, "avaoh_input_blur"));
+        drag = reinterpret_cast<decltype(drag)>(dlsym(handle, "avaoh_drag"));
         setLifecycle = reinterpret_cast<decltype(setLifecycle)>(dlsym(handle, "avaoh_set_lifecycle"));
         setTheme = reinterpret_cast<decltype(setTheme)>(dlsym(handle, "avaoh_set_theme"));
         setDisplays = reinterpret_cast<decltype(setDisplays)>(dlsym(handle, "avaoh_set_displays"));
@@ -74,6 +75,7 @@ struct AppLibrary {
     void (*pointer)(int64_t, int32_t, int32_t, double, double, double, double, int32_t) = nullptr;
     int32_t (*key)(int64_t, int32_t, int32_t, int32_t, int32_t, int32_t) = nullptr;
     void (*inputBlur)(int64_t) = nullptr;
+    int32_t (*drag)(int64_t, int32_t, double, double, int32_t, int32_t, const char*, int32_t) = nullptr;
     void (*setLifecycle)(int32_t) = nullptr;
     void (*setTheme)(int32_t) = nullptr;
     avalonia::DisplayCallback setDisplays = nullptr;
@@ -656,6 +658,42 @@ napi_value InputBlur(napi_env env, napi_callback_info info)
     return nullptr;
 }
 
+napi_value Drag(napi_env env, napi_callback_info info)
+{
+    const auto rejected = [env]() {
+        napi_value result = nullptr;
+        napi_get_boolean(env, false, &result);
+        return result;
+    };
+    size_t count = 7;
+    napi_value args[7];
+    uint64_t surfaceId;
+    int32_t phase, modifiers, formats;
+    double x, y;
+    size_t length = 0;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 7 ||
+        !ParseSurfaceId(env, args[0], surfaceId) ||
+        napi_get_value_int32(env, args[1], &phase) != napi_ok || phase < 0 || phase > 3 ||
+        napi_get_value_double(env, args[2], &x) != napi_ok || !std::isfinite(x) ||
+        napi_get_value_double(env, args[3], &y) != napi_ok || !std::isfinite(y) ||
+        napi_get_value_int32(env, args[4], &modifiers) != napi_ok ||
+        napi_get_value_int32(env, args[5], &formats) != napi_ok ||
+        napi_get_value_string_utf8(env, args[6], nullptr, 0, &length) != napi_ok ||
+        length > 1'048'576 || (phase != 3 && length != 0))
+        return rejected();
+
+    std::string payload(length + 1, 0);
+    if (length != 0 && napi_get_value_string_utf8(env, args[6], payload.data(), payload.size(), &length) != napi_ok)
+        return rejected();
+    const auto token = SurfaceToken(surfaceId);
+    const bool accepted = token != 0 && App().drag != nullptr &&
+        App().drag(token, phase, x, y, modifiers, formats, payload.data(), static_cast<int32_t>(length)) != 0;
+
+    napi_value result = nullptr;
+    napi_get_boolean(env, accepted, &result);
+    return result;
+}
+
 bool WaitAndCloseFence(int fence)
 {
     if (fence < 0)
@@ -724,7 +762,8 @@ napi_value Init(napi_env env, napi_value exports)
         {"touch", nullptr, Touch, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pointer", nullptr, Pointer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"key", nullptr, Key, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"inputBlur", nullptr, InputBlur, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"inputBlur", nullptr, InputBlur, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"drag", nullptr, Drag, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     if (napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties) != napi_ok)
         return Error(env, "Could not export the Avalonia OpenHarmony bridge.");
