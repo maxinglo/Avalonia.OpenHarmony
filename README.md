@@ -108,7 +108,7 @@ foreground and background commands, color accents, system font scale and safe-ar
 ## Compatibility
 
 The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its scope is a
-single embedded Avalonia view with software rendering, resizing and in-surface popups, touch, mouse and hardware
+single embedded Avalonia view with software rendering or opt-in Skia EGL, resizing and in-surface popups, touch, mouse and hardware
 keyboard input, optional system text input, clipboard, and system file and link operations. Applications own their
 service and settings lifetimes. The [platform verification matrix](docs/platform-validation.md) distinguishes
 device checks, local probes and remaining platform work.
@@ -120,7 +120,9 @@ in [THIRD-PARTY.md](THIRD-PARTY.md).
 ## Emulator verification
 
 The API 26 x86_64 Counter HAP was installed and launched on the Huawei_TripleFold local emulator. The native bridge
-presented an Avalonia frame and tapping **Add one** updated the counter to 1.
+presented 3184 × 1872 Avalonia frames in both the software and EGL builds. Tapping **Add one** updated the counter
+to 1. The sample selected a ComboBox item, copied text to the system clipboard, pasted through the ArkUI security
+button, and saved and reopened a 24-byte file through the system picker.
 
 ### Input method verification
 
@@ -134,8 +136,9 @@ system input method. In a separate ArkTS app, self-drawn binding returned `12800
 gained focus, the keyboard windows stayed at 0 × 0, and the keyboard process was absent during the check.
 System apps and a standard unsigned ArkUI TextInput sample later opened the keyboard successfully on the same
 emulator. The standard sample received nine characters through the system keyboard. A later cold launch of the
-Avalonia Counter also displayed the keyboard and did not reproduce `12800008`. Text insertion and deletion through
-the Avalonia IME bridge are separate device checks.
+Avalonia Counter also displayed the keyboard and did not reproduce `12800008`. The EGL package received multiple
+system keyboard commits in the Avalonia TextBox. A hardware Backspace removed the sample's trailing emoji in one
+action. Soft-keyboard Backspace still needs device verification.
 
 ## Repository workflow
 
