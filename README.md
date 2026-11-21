@@ -105,8 +105,9 @@ thread. A request that cannot begin within 150 ms returns to ArkUI for default n
 begun, the bridge consumes the request at its deadline to avoid a second
 navigation. [ArkUI entry page lifecycle](https://developer.huawei.com/consumer/en/doc/harmonyos-references/ts-custom-component-lifecycle/)
 
-The sample's `Program.Platform.cs` shows the optional NativeAOT exports. Avalonia secondary windows, application-driven
-foreground and background commands, color accents and system font scale remain pending.
+The sample's `Program.Platform.cs` shows the optional NativeAOT exports. The windowed host supports native child
+windows owned by its stage. Application-driven foreground and background commands, color accents and system font scale
+remain pending.
 
 ### Safe areas and input pane
 
@@ -144,8 +145,9 @@ Avalonia, where the host checks the active surface registration and node again b
 Set `enableAccessibility: true` on `AvaloniaSurfaceHost` and enable a HarmonyOS accessibility service.
 Application libraries opt in by exporting `avaoh_accessibility_configure` and `avaoh_accessibility_invoke`, as Counter
 does.
-The bridge clears the snapshot when accessibility is disabled or the surface is replaced. Scroll, text editing, value
-changes through accessibility actions, and end-to-end ScreenReader acceptance remain outside this first implementation.
+The bridge clears the snapshot when accessibility is disabled or the surface is replaced. System ScreenReader focused
+and invoked the Counter's main button on the API 26 emulator. Scroll, text editing and value changes through
+accessibility actions still need platform support.
 [HarmonyOS XComponent accessibility guide](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/ndk-accessibility-xcomponent/)
 
 On the API 26 x86_64 emulator, a standalone CustomNode probe registered its native provider and answered a system

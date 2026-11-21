@@ -48,4 +48,10 @@ With the Chinese software keyboard active, focus **Type here** in Counter and ty
 Check the visible provisional text before choosing a candidate. The sample's text length log
 should show a change when the candidate is accepted. Repeat with a selection and check
 replacement, then repeat and move focus to verify that the provisional display clears.
-This device check is pending for composition preview.
+On the API 26 x86_64 Huawei_TripleFold emulator, the Xiaoyi Chinese keyboard offered a
+candidate for nu while Avalonia still displayed the empty placeholder. Selecting 奴
+and then entering nuli and selecting 努力 produced commits of one and two UTF-16
+units. The control displayed 奴努力. This confirms the system candidate bar and final
+text delivery. The keyboard did not expose an inline preview in this trial. The native
+callback and inline rendering are covered by the Windows probe. A device check for
+SetPreviewText, replacement of a selection, and cancellation on blur is still pending.

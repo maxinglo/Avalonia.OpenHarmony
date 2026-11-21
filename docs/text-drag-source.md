@@ -25,7 +25,10 @@ ArkUI's completion still releases the system drag slot. This route supports touc
 The Windows control probe used Avalonia's public `DragDrop.DoDragDropAsync` with a routed touch press, validated
 the Unicode and per-press identity across the bridge, and checked asynchronous completion and data disposal.
 The ArkTS state probe covered released, canceled, unfocused, stale and concurrent gestures, and source destruction.
-DevEco API 26 x86_64 compiled and packaged the native bridge and ArkTS Counter.
+DevEco API 26 x86_64 compiled and packaged the native bridge and ArkTS Counter. The Huawei_TripleFold emulator
+accepted a touch drag from each of the Counter main and owned windows into an independent ArkTS HAP in system split
+screen. The receiver matched the fixed 16 UTF-16 unit fixture and Counter reported Copy in each window. The system
+rejected a drag released over a blank area.
 
 For an on-device check, run Counter and a second ArkUI app with a plain-text drop target in split screen.
 Drag Counter's **Drag Avalonia sample text** into the destination. Confirm that the receiver sees
