@@ -16,6 +16,8 @@ internal sealed unsafe class NativeTextInput(
     private static readonly ConcurrentDictionary<nint, Session> Sessions = new();
     private readonly Dispatcher _dispatcher = Dispatcher.UIThread;
     private readonly SurfaceTopLevel _surface = surface;
+    private readonly OpenHarmonyInputDiagnostics? _diagnostics =
+        AvaloniaLocator.Current.GetService<OpenHarmonyInputDiagnostics>();
     private TextInputMethodClient? _client;
     private TextInputOptions _options = TextInputOptions.Default;
     private Session? _session;
@@ -103,6 +105,7 @@ internal sealed unsafe class NativeTextInput(
             session.Proxy = proxy;
             session.Options = options;
             _session = session;
+            _diagnostics?.Report($"IME attached: window {windowId}");
             NotifySelection(session);
             UpdateCursor(proxy);
         }
@@ -274,7 +277,11 @@ internal sealed unsafe class NativeTextInput(
         if (text != null && length is > 0 and <= 1_048_576)
         {
             var value = new string(text, 0, (int)length);
-            Queue(editor, (input, _) => input._surface.InsertText(value));
+            Queue(editor, (input, _) =>
+            {
+                input._diagnostics?.Report($"IME commit: {value.Length} UTF-16 units");
+                input._surface.InsertText(value);
+            });
         }
     }
 
@@ -282,14 +289,22 @@ internal sealed unsafe class NativeTextInput(
     private static void DeleteBackward(nint editor, int length)
     {
         if (length > 0)
-            Queue(editor, (input, client) => input.Delete(client, length, backward: true));
+            Queue(editor, (input, client) =>
+            {
+                input._diagnostics?.Report($"IME backspace: {length} UTF-16 units");
+                input.Delete(client, length, backward: true);
+            });
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void DeleteForward(nint editor, int length)
     {
         if (length > 0)
-            Queue(editor, (input, client) => input.Delete(client, length, backward: false));
+            Queue(editor, (input, client) =>
+            {
+                input._diagnostics?.Report($"IME forward delete: {length} UTF-16 units");
+                input.Delete(client, length, backward: false);
+            });
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -308,7 +323,8 @@ internal sealed unsafe class NativeTextInput(
         });
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void KeyboardStatusChanged(nint editor, int status) { }
+    private static void KeyboardStatusChanged(nint editor, int status) =>
+        Queue(editor, (input, _) => input._diagnostics?.Report($"IME keyboard status: {status}"));
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void MoveCursor(nint editor, CursorDirection direction)

@@ -10,6 +10,8 @@ internal sealed partial class SurfaceTopLevel
         RawInputModifiers.XButton1MouseButton | RawInputModifiers.XButton2MouseButton;
 
     private readonly MouseDevice _mouse = new();
+    private readonly OpenHarmonyInputDiagnostics? _hardwareDiagnostics =
+        AvaloniaLocator.Current.GetService<OpenHarmonyInputDiagnostics>();
     private RawInputModifiers _pressedMouseButtons;
 
     internal void HardwarePointer(int phase, int button, double x, double y, double wheelX, double wheelY,
@@ -64,8 +66,12 @@ internal sealed partial class SurfaceTopLevel
         var input = new RawKeyEventArgs(_keyboard, timestamp, root,
             down ? RawKeyEventType.KeyDown : RawKeyEventType.KeyUp, key.Key, modifiers, key.Physical, text);
         Input?.Invoke(input);
-        if (down && !input.Handled && text is not null)
-            Input?.Invoke(new RawTextInputEventArgs(_keyboard, timestamp, root, text));
+        if (down)
+        {
+            _hardwareDiagnostics?.Report($"Hardware key: handled={input.Handled}, text units={text?.Length ?? 0}");
+            if (!input.Handled && text is not null)
+                Input?.Invoke(new RawTextInputEventArgs(_keyboard, timestamp, root, text));
+        }
     }
 
     private static RawPointerEventType? PointerTypeFor(int phase, int button) => (phase, button) switch
