@@ -148,7 +148,8 @@ changes through accessibility actions, and end-to-end ScreenReader acceptance re
 On the API 26 x86_64 emulator, a standalone CustomNode probe registered its native provider and answered a system
 accessibility query while the original XComponent controller still opened its NativeWindow and received ordinary
 touch. A separate managed probe verified names, physical bounds, focus, disabled state, and Invoke on the actual
-AudioSynx Arc view. The combined Avalonia device path still needs a HAP acceptance run.
+AudioSynx Arc view. The combined Counter HAP then passed a ScreenReader check on the same emulator. The system
+focused the Avalonia Add one semantic node, and the ScreenReader activation gesture invoked it and incremented the counter.
 
 ### Owned windows
 
