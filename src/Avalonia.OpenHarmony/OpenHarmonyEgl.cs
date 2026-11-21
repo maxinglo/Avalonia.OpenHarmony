@@ -20,6 +20,7 @@ internal sealed class OpenHarmonyEgl
         Graphics = new EglPlatformGraphics(new EglDisplay(new EglDisplayCreationOptions
         {
             Egl = new EglInterface(GetAddress),
+            SupportsMultipleContexts = true,
             GlVersions = [new(GlProfileType.OpenGLES, 3, 0), new(GlProfileType.OpenGLES, 2, 0)]
         }));
     }
