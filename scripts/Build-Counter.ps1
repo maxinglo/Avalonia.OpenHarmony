@@ -1,0 +1,139 @@
+#Requires -Version 7.0
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$DevEcoRoot,
+    [Parameter(Mandatory)][string]$OpenHarmonyNetRoot,
+    [ValidateSet('x86_64', 'arm64-v8a')][string]$Abi = 'x86_64',
+    [ValidateSet('debug', 'release')][string]$BuildMode = 'debug',
+    [string]$NuGetRoot,
+    [string]$HvigorHome,
+    [string]$OhPmHome,
+    [switch]$StageOnly
+)
+
+$ErrorActionPreference = 'Stop'
+$repository = Split-Path -Parent $PSScriptRoot
+$DevEcoRoot = (Resolve-Path -LiteralPath $DevEcoRoot).ProviderPath
+$OpenHarmonyNetRoot = (Resolve-Path -LiteralPath $OpenHarmonyNetRoot).ProviderPath
+$sdk = Join-Path $DevEcoRoot 'sdk/default'
+$native = Join-Path $sdk 'openharmony/native'
+$manifest = Get-Content -Raw -LiteralPath (Join-Path $native 'oh-uni-package.json') | ConvertFrom-Json
+if ($manifest.apiVersion -ne '26' -or $manifest.platformVersion -ne '26.0.0' -or $manifest.releaseType -ne 'Release') {
+    throw "Use the API 26.0.0 Release native SDK. Found $($manifest.version) $($manifest.releaseType)."
+}
+
+$runtimeCommit = '9114affc54e9d7d94246708b841ec7f037119ea6'
+$actualCommit = & git -C $OpenHarmonyNetRoot rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $runtimeCommit) {
+    throw "Check out ohos_net-opensource at $runtimeCommit."
+}
+
+$rid, $machine = if ($Abi -eq 'x86_64') { 'linux-musl-x64', 'X86-64' } else { 'linux-musl-arm64', 'AArch64' }
+$build = Join-Path $repository "artifacts/build/$Abi"
+$managed = Join-Path $build 'managed'
+$hap = Join-Path $build 'Hap'
+if (!$NuGetRoot) { $NuGetRoot = Join-Path $repository 'artifacts/cache/nuget' }
+if (!$HvigorHome) { $HvigorHome = Join-Path $repository 'artifacts/cache/hvigor' }
+if (!$OhPmHome) { $OhPmHome = Join-Path $repository 'artifacts/cache/ohpm' }
+New-Item -ItemType Directory -Force -Path $build,$hap,$NuGetRoot,$HvigorHome,$OhPmHome | Out-Null
+$NuGetRoot = (Resolve-Path -LiteralPath $NuGetRoot).ProviderPath
+$sample = Join-Path $repository 'samples/Counter'
+
+Push-Location $repository
+try {
+    & dotnet publish (Join-Path $sample 'Counter.csproj') -c Release -r $rid -o $managed `
+        '-p:OpenHarmonyBuild=true' '-p:OpenHarmonyApiLevel=26' "-p:OpenHarmonyAbi=$Abi" `
+        "-p:OpenHarmonyNetRoot=$OpenHarmonyNetRoot" "-p:OpenHarmonySdkRoot=$sdk" "-p:OpenHarmonyNativeRoot=$native" `
+        "-p:ArtifactsPath=$build/dotnet" "-p:RestorePackagesPath=$NuGetRoot" -m:1 -nr:false
+    if ($LASTEXITCODE -ne 0) { throw 'The Counter NativeAOT publish failed.' }
+} finally {
+    Pop-Location
+}
+
+$executableSuffix = if ($IsWindows) { '.exe' } else { '' }
+$readElf = Join-Path $native "llvm/bin/llvm-readelf$executableSuffix"
+$appLibrary = Join-Path $managed 'libavalonia_ohos_app.so'
+$symbolOutput = & $readElf --file-header --dyn-syms --wide $appLibrary
+$symbols = $symbolOutput -join "`n"
+if ($LASTEXITCODE -ne 0 -or $symbols -notmatch "Machine:.*$machine") {
+    throw "The managed application must be $Abi ELF."
+}
+foreach ($export in @('avaoh_resize', 'avaoh_destroy', 'avaoh_touch')) {
+    if ($symbols -notmatch "\b$export\b") { throw "The NativeAOT application is missing $export." }
+}
+
+Copy-Item -Path (Join-Path $sample 'Hap/*') -Destination $hap -Recurse -Force
+$cpp = Join-Path $hap 'entry/src/main/cpp'
+$nativeSource = Join-Path $repository 'src/Avalonia.OpenHarmony.Native'
+Copy-Item -LiteralPath (Join-Path $nativeSource 'CMakeLists.txt'),(Join-Path $nativeSource 'bridge.cpp') -Destination $cpp -Force
+$moduleProfilePath = Join-Path $hap 'entry/build-profile.json5'
+$moduleProfile = Get-Content -LiteralPath $moduleProfilePath -Raw | ConvertFrom-Json
+$moduleProfile.buildOption.externalNativeOptions.abiFilters = @($Abi)
+$moduleProfile | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $moduleProfilePath -Encoding utf8
+
+$libs = Join-Path $hap "entry/libs/$Abi"
+New-Item -ItemType Directory -Force -Path $libs | Out-Null
+$graphicsScript = Join-Path $PSScriptRoot 'PrepareOpenHarmonyGraphics.ps1'
+& $graphicsScript -Destination $libs -NuGetRoot $NuGetRoot -OpenHarmonyNetRoot $OpenHarmonyNetRoot -NativeSdkRoot $native -Abi $Abi
+Copy-Item -LiteralPath $appLibrary -Destination $libs -Force
+$notices = Join-Path $hap 'entry/src/main/resources/rawfile/graphics-licenses'
+New-Item -ItemType Directory -Force -Path $notices | Out-Null
+Copy-Item -Path (Join-Path $libs 'licenses/*') -Destination $notices -Force
+Write-Host "Staged DevEco project at $hap"
+if ($StageOnly) { return }
+
+$commandSuffix = if ($IsWindows) { '.bat' } else { '' }
+$ohpm = Join-Path $DevEcoRoot "tools/ohpm/bin/ohpm$commandSuffix"
+$hvigor = Join-Path $DevEcoRoot "tools/hvigor/bin/hvigorw$commandSuffix"
+$javaHome = Join-Path $DevEcoRoot 'jbr'
+$buildEnvironment = @{
+    DEVECO_SDK_HOME = Join-Path $DevEcoRoot 'sdk'
+    JAVA_HOME = $javaHome
+    HVIGOR_USER_HOME = $HvigorHome
+    OHPM_HOME = $OhPmHome
+    Path = ((Join-Path $DevEcoRoot 'tools/node'),(Join-Path $DevEcoRoot 'tools/ohpm/bin'),
+        (Join-Path $javaHome 'bin'),$env:Path) -join [IO.Path]::PathSeparator
+}
+$previousEnvironment = @{}
+Push-Location $hap
+try {
+    foreach ($name in $buildEnvironment.Keys) {
+        $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        [Environment]::SetEnvironmentVariable($name, $buildEnvironment[$name], 'Process')
+    }
+    & $ohpm install --all
+    if ($LASTEXITCODE -ne 0) { throw "ohpm install failed ($LASTEXITCODE)." }
+    & $hvigor assembleHap --mode module -p product=default -p 'module=entry@default' -p "buildMode=$BuildMode" --no-daemon
+    if ($LASTEXITCODE -ne 0) { throw "Hvigor assembleHap failed ($LASTEXITCODE)." }
+} finally {
+    foreach ($name in $previousEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+    }
+    Pop-Location
+}
+
+$builtHap = Join-Path $hap 'entry/build/default/outputs/default/entry-default-unsigned.hap'
+$archive = [IO.Compression.ZipFile]::OpenRead($builtHap)
+try {
+    $required = @('module.json', 'resources.index', 'ets/modules.abc', "libs/$Abi/libavalonia_ohos_bridge.so")
+    $required += Get-ChildItem -LiteralPath $libs -File | Where-Object Name -Match '\.so(\.\d+)*$' |
+        ForEach-Object { "libs/$Abi/$($_.Name)" }
+    foreach ($entry in $required) {
+        if ($archive.GetEntry($entry).Length -le 0) { throw "HAP is missing $entry." }
+    }
+    $profileReader = [IO.StreamReader]::new($archive.GetEntry('module.json').Open())
+    try { $profile = $profileReader.ReadToEnd() | ConvertFrom-Json }
+    finally { $profileReader.Dispose() }
+    if ($profile.app.compileSdkType -ne 'HarmonyOS' -or $profile.app.apiReleaseType -ne 'Release' -or
+        $profile.app.minAPIVersion -ne 260000026 -or $profile.app.targetAPIVersion -ne 260000026) {
+        throw 'The packaged HarmonyOS profile does not target API 26.'
+    }
+} finally {
+    $archive.Dispose()
+}
+
+$packageDirectory = Join-Path $repository "artifacts/packages/$Abi/$BuildMode"
+New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
+$package = Join-Path $packageDirectory 'AvaloniaCounter-unsigned.hap'
+Copy-Item -LiteralPath $builtHap -Destination $package -Force
+Get-FileHash -LiteralPath $package -Algorithm SHA256
