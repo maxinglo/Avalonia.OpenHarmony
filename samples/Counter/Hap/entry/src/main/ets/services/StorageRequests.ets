@@ -4,6 +4,10 @@ import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 
 const folderSelectionCapability: string = 'SystemCapability.FileManagement.UserFileService.FolderSelection';
 
+export function supportsFolderPicker(): boolean {
+  return canIUse(folderSelectionCapability);
+}
+
 interface PickerRequest {
   startUri: string | null;
   multiple: boolean;

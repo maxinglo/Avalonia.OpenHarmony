@@ -15,6 +15,7 @@
 #include <native_buffer/native_buffer.h>
 #include <native_window/external_window.h>
 #include "system_requests.h"
+#include "platform_displays.h"
 
 namespace {
 constexpr char Tag[] = "AvaloniaOHOS";
@@ -34,6 +35,13 @@ struct AppLibrary {
         pointer = reinterpret_cast<decltype(pointer)>(dlsym(handle, "avaoh_pointer"));
         key = reinterpret_cast<decltype(key)>(dlsym(handle, "avaoh_key"));
         inputBlur = reinterpret_cast<decltype(inputBlur)>(dlsym(handle, "avaoh_input_blur"));
+        setLifecycle = reinterpret_cast<decltype(setLifecycle)>(dlsym(handle, "avaoh_set_lifecycle"));
+        setTheme = reinterpret_cast<decltype(setTheme)>(dlsym(handle, "avaoh_set_theme"));
+        setDisplays = reinterpret_cast<decltype(setDisplays)>(dlsym(handle, "avaoh_set_displays"));
+        setWindowPosition = reinterpret_cast<decltype(setWindowPosition)>(dlsym(handle, "avaoh_set_window_position"));
+        setSurfaceOffset = reinterpret_cast<decltype(setSurfaceOffset)>(dlsym(handle, "avaoh_set_surface_offset"));
+        requestBack = reinterpret_cast<decltype(requestBack)>(dlsym(handle, "avaoh_request_back"));
+        paste = reinterpret_cast<decltype(paste)>(dlsym(handle, "avaoh_paste"));
     }
 
     // Keep the NativeAOT library loaded for the process lifetime.
@@ -44,6 +52,13 @@ struct AppLibrary {
     void (*pointer)(int64_t, int32_t, int32_t, double, double, double, double, int32_t) = nullptr;
     int32_t (*key)(int64_t, int32_t, int32_t, int32_t, int32_t, int32_t) = nullptr;
     void (*inputBlur)(int64_t) = nullptr;
+    void (*setLifecycle)(int32_t) = nullptr;
+    void (*setTheme)(int32_t) = nullptr;
+    avalonia::DisplayCallback setDisplays = nullptr;
+    void (*setWindowPosition)(int64_t, int32_t, int32_t) = nullptr;
+    void (*setSurfaceOffset)(int64_t, int32_t, int32_t) = nullptr;
+    int32_t (*requestBack)() = nullptr;
+    void (*paste)() = nullptr;
 
     bool ready() const { return resize != nullptr && destroy != nullptr && touch != nullptr; }
 };
@@ -135,6 +150,84 @@ napi_value ConfigureInputMethod(napi_env env, napi_callback_info info)
         return Error(env, "Provide a valid HarmonyOS window ID for the input method.");
     inputWindowId.store(windowId, std::memory_order_relaxed);
     return nullptr;
+}
+
+napi_value SetLifecycle(napi_env env, napi_callback_info info)
+{
+    size_t count = 1;
+    napi_value argument;
+    int32_t transition;
+    if (napi_get_cb_info(env, info, &count, &argument, nullptr, nullptr) != napi_ok || count != 1 ||
+        napi_get_value_int32(env, argument, &transition) != napi_ok || transition < 0 || transition > 5)
+        return Error(env, "Invalid Avalonia lifecycle transition.");
+    if (auto callback = App().setLifecycle; callback != nullptr)
+        callback(transition);
+    return nullptr;
+}
+
+napi_value SetTheme(napi_env env, napi_callback_info info)
+{
+    size_t count = 1;
+    napi_value argument;
+    bool dark;
+    if (napi_get_cb_info(env, info, &count, &argument, nullptr, nullptr) != napi_ok || count != 1 ||
+        napi_get_value_bool(env, argument, &dark) != napi_ok)
+        return Error(env, "Expected a platform dark-mode flag.");
+    if (auto callback = App().setTheme; callback != nullptr)
+        callback(dark ? 1 : 0);
+    return nullptr;
+}
+
+napi_value RefreshDisplays(napi_env, napi_callback_info)
+{
+    if (auto callback = App().setDisplays; callback != nullptr)
+        avalonia::PublishDisplays(callback);
+    return nullptr;
+}
+
+napi_value SetWindowPosition(napi_env env, napi_callback_info info)
+{
+    size_t count = 3;
+    napi_value args[3];
+    int64_t displayId;
+    int32_t x, y;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 3 ||
+        napi_get_value_int64(env, args[0], &displayId) != napi_ok || displayId < 0 ||
+        napi_get_value_int32(env, args[1], &x) != napi_ok || napi_get_value_int32(env, args[2], &y) != napi_ok)
+        return Error(env, "Expected a display ID and pixel coordinates.");
+    if (auto callback = App().setWindowPosition; callback != nullptr)
+        callback(displayId, x, y);
+    return nullptr;
+}
+
+napi_value SetSurfaceOffset(napi_env env, napi_callback_info info)
+{
+    size_t count = 3;
+    napi_value args[3];
+    uint64_t surfaceId;
+    int32_t x, y;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 3 ||
+        !ParseSurfaceId(env, args[0], surfaceId) ||
+        napi_get_value_int32(env, args[1], &x) != napi_ok || napi_get_value_int32(env, args[2], &y) != napi_ok)
+        return Error(env, "Expected an XComponent surface ID and pixel coordinates.");
+
+    int64_t token = 0;
+    {
+        std::lock_guard lock(surfaceMutex);
+        if (surface.id == surfaceId)
+            token = surface.token;
+    }
+    if (auto callback = App().setSurfaceOffset; token != 0 && callback != nullptr)
+        callback(token, x, y);
+    return nullptr;
+}
+
+napi_value RequestBack(napi_env env, napi_callback_info)
+{
+    auto callback = App().requestBack;
+    napi_value result = nullptr;
+    napi_get_boolean(env, callback != nullptr && callback() != 0, &result);
+    return result;
 }
 
 napi_value UpdateSurface(napi_env env, napi_callback_info info)
@@ -334,6 +427,13 @@ bool CopyPixels(OHNativeWindowBuffer* windowBuffer, const char* pixels, int widt
     return OH_NativeBuffer_Unmap(buffer) == 0;
 }
 
+napi_value RequestPaste(napi_env, napi_callback_info)
+{
+    if (auto paste = App().paste; paste != nullptr)
+        paste();
+    return nullptr;
+}
+
 napi_value Init(napi_env env, napi_value exports)
 {
     const napi_property_descriptor properties[] = {
@@ -345,6 +445,13 @@ napi_value Init(napi_env env, napi_value exports)
             napi_default, nullptr},
         {"completeSystemRequest", nullptr, AvaloniaOpenHarmony::CompleteSystemRequest, nullptr, nullptr, nullptr,
             napi_default, nullptr},
+        {"setLifecycle", nullptr, SetLifecycle, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setTheme", nullptr, SetTheme, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"refreshDisplays", nullptr, RefreshDisplays, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setWindowPosition", nullptr, SetWindowPosition, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setSurfaceOffset", nullptr, SetSurfaceOffset, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"requestBack", nullptr, RequestBack, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"requestPaste", nullptr, RequestPaste, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"updateSurface", nullptr, UpdateSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"closeSurface", nullptr, CloseSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"touch", nullptr, Touch, nullptr, nullptr, nullptr, napi_default, nullptr},

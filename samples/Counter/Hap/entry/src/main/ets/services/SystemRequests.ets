@@ -3,16 +3,19 @@ import { uniformTypeDescriptor } from '@kit.ArkData';
 import { fileUri } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import bridge from 'libavalonia_ohos_bridge.so';
+import { executeStorageRequest, supportsFolderPicker } from './StorageRequests';
 
 export function registerSystemRequests(context: common.UIAbilityContext): void {
   bridge.registerSystemRequests((id: bigint, operation: string, argument: string): void => {
-    executeLauncherRequest(context, operation, argument)
-      .then((value: string | null): void => bridge.completeSystemRequest(id, value))
-      .catch((error: Error): void => {
-        hilog.warn(0x0202, 'AvaloniaOHOS', 'System request %{public}s failed', operation);
-        bridge.completeSystemRequest(id, null);
-      });
-  });
+    const finish = (value: string | null, fd?: number): void => bridge.completeSystemRequest(id, value, fd);
+    const request: Promise<void> = operation.startsWith('storage.')
+      ? executeStorageRequest(context, operation, argument, finish)
+      : executeLauncherRequest(context, operation, argument).then((value: string | null): void => finish(value));
+    request.catch((_error: Error): void => {
+      hilog.warn(0x0202, 'AvaloniaOHOS', 'System request %{public}s failed', operation);
+      finish(null);
+    });
+  }, supportsFolderPicker());
 }
 
 async function executeLauncherRequest(context: common.UIAbilityContext, operation: string,

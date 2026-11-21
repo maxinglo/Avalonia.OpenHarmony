@@ -22,19 +22,23 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     private readonly ILauncher? _launcher;
     private readonly IStorageProvider? _storageProvider;
     private readonly OpenHarmonyCursorController? _cursorController;
+    private readonly OpenHarmonyScreens _screens;
+    private readonly OpenHarmonyNavigationManager _navigation = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private IInputRoot? _inputRoot;
     private PixelSize _pixelSize;
     private IntPtr _pixels;
 
     public SurfaceTopLevel(long surface, Compositor compositor, OpenHarmonyHost.PresentFrame present,
-        Func<int>? getInputWindowId, Action<string> reportError, ILauncher? launcher, IStorageProvider? storageProvider)
+        Func<int>? getInputWindowId, Action<string> reportError, OpenHarmonyScreens screens,
+        ILauncher? launcher, IStorageProvider? storageProvider)
     {
         Surface = surface;
         Compositor = compositor;
         _present = present;
         _launcher = launcher;
         _storageProvider = storageProvider;
+        _screens = screens;
         if (getInputWindowId is not null)
         {
             _textInput = new(this, getInputWindowId, reportError);
@@ -49,6 +53,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     public Size ClientSize => new(_pixelSize.Width / RenderScaling, _pixelSize.Height / RenderScaling);
     public double RenderScaling { get; private set; } = 1;
     public double DesktopScaling => RenderScaling;
+    internal PixelPoint ScreenOrigin { get; set; }
     public IPlatformHandle? Handle => null;
     public Action<RawInputEventArgs>? Input { get; set; }
     public Action<Rect>? Paint { get; set; }
@@ -111,6 +116,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     }
 
     public void SetInputRoot(IInputRoot inputRoot) => _inputRoot = inputRoot;
+    internal bool RequestBack() => _navigation.RequestBack();
 
     internal void InsertText(string text)
     {
@@ -128,8 +134,8 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         Input?.Invoke(new RawKeyEventArgs(_keyboard, time, root, RawKeyEventType.KeyUp, key,
             RawInputModifiers.None, PhysicalKey.None, null));
     }
-    public Point PointToClient(PixelPoint point) => point.ToPoint(RenderScaling);
-    public PixelPoint PointToScreen(Point point) => PixelPoint.FromPoint(point, RenderScaling);
+    public Point PointToClient(PixelPoint point) => (point - ScreenOrigin).ToPoint(RenderScaling);
+    public PixelPoint PointToScreen(Point point) => PixelPoint.FromPoint(point, RenderScaling) + ScreenOrigin;
     public void SetCursor(ICursorImpl? cursor) =>
         _cursorController?.Apply((cursor as OpenHarmonyCursor)?.Kind ?? StandardCursorType.Arrow);
     public IPopupImpl? CreatePopup() => null;
@@ -145,6 +151,10 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
             return _launcher;
         if (featureType == typeof(IStorageProvider))
             return _storageProvider;
+        if (featureType == typeof(ISystemNavigationManagerImpl))
+            return _navigation;
+        if (featureType == typeof(IScreenImpl))
+            return _screens;
         return null;
     }
 

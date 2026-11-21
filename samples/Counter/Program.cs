@@ -14,8 +14,9 @@ public static partial class Program
     private static readonly Lazy<OpenHarmonyHost> Host = new(() =>
     {
         CounterApp.Trace = Report;
-        return new OpenHarmonyHost(AppBuilder.Configure<CounterApp>, Present, Report, GetInputWindowId,
-            new OpenHarmonyLauncher(OpenHarmonySystemRequests.RequestAsync), null);
+        return new OpenHarmonyHost(AppBuilder.Configure<CounterApp>, Present, Report, GetInputWindowId, _initialTheme,
+            new OpenHarmonyLauncher(OpenHarmonySystemRequests.RequestAsync),
+            new OpenHarmonyStorageProvider(OpenHarmonySystemRequests.RequestAsync, CanPickFolders() != 0));
     });
 
     [UnmanagedCallersOnly(EntryPoint = "avaoh_resize")]
@@ -63,6 +64,16 @@ public static partial class Program
 
     [LibraryImport("libavalonia_ohos_bridge.so", EntryPoint = "avaoh_ime_window_id")]
     private static partial int GetInputWindowId();
+
+    [LibraryImport("libavalonia_ohos_bridge.so", EntryPoint = "avaoh_can_pick_folders")]
+    private static partial int CanPickFolders();
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_paste")]
+    public static void Paste()
+    {
+        if (Host.IsValueCreated)
+            Host.Value.PasteToFocusedTextBox();
+    }
 #else
     public static async Task Main()
     {

@@ -67,12 +67,37 @@ surrounding text to the input method for standard fields. Avalonia's sensitive-t
 surrounding-text
 sharing. [HarmonyOS native input method guide](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/use-inputmethod-in-custom-edit-box-ndk/)
 
+### Window lifecycle, theme and displays
+
+The Counter's `PlatformWindow.ets` forwards window show, hide and focus changes. The ability forwards application
+foreground and background separately. Avalonia pauses the embedded renderer while the window is hidden or the ability
+is backgrounded. It keeps the view alive and clears input focus when the window becomes inactive. Applications can
+subscribe to `Application.TryGetFeature<IActivatableLifetime>()` for activation changes of kind
+`Background`. [HarmonyOS window lifecycle](https://developer.huawei.com/consumer/en/doc/HarmonyOS-Guides/window-lifecycle/)
+
+The ability's color-mode configuration supplies the initial theme and updates Avalonia `IPlatformSettings` when it
+changes. Use `ThemeVariant.Default` in an application that follows the system. Displays come from the Native Display
+Manager, including their primary flag, bounds, density and orientation. The host window and XComponent offsets allow
+screen and client coordinate conversion. Display bounds serve as the working-area fallback when the system cannot report
+the available
+area. [HarmonyOS Native Display Manager](https://developer.huawei.com/consumer/en/doc/harmonyos-references/capi-oh-display-manager-h/)
+
+The ArkUI entry page forwards its synchronous `onBackPress` callback to `TopLevel.BackRequested`. The event handler
+can set `Handled` to override the system action. Keep handlers brief and avoid waiting for ArkUI from the Avalonia
+thread. A request that cannot begin within 150 ms returns to ArkUI for default navigation. If a handler has already
+begun, the bridge consumes the request at its deadline to avoid a second
+navigation. [ArkUI entry page lifecycle](https://developer.huawei.com/consumer/en/doc/harmonyos-references/ts-custom-component-lifecycle/)
+
+The sample's `Program.Platform.cs` shows the optional NativeAOT exports. Avalonia secondary windows, application-driven
+foreground and background commands, color accents, system font scale and safe-area integration remain pending.
+
 ## Compatibility
 
 The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its scope is a
-single embedded Avalonia view, software rendering, surface recreation, resizing, touch, and optional system text input.
-Composition preview, direct hardware keyboard events, system clipboard, pointing devices, accessibility, multiple
-windows and accelerated rendering are pending. Applications own their service and settings lifetimes.
+single embedded Avalonia view with software rendering, resizing and in-surface popups, touch, mouse and hardware
+keyboard input, optional system text input, clipboard, and system file and link operations. Applications own their
+service and settings lifetimes. The [platform verification matrix](docs/platform-validation.md) distinguishes
+device checks, local probes and remaining platform work.
 
 The graphics preparation script pins and checks the two NuGet native asset packages and the auxiliary libraries supplied
 by the pinned OpenHarmony .NET checkout. HarmonyOS supplies `libc.so`. See the distribution and license details

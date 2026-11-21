@@ -19,6 +19,7 @@ struct Request {
 
 std::mutex requestsMutex;
 napi_threadsafe_function dispatcher = nullptr;
+bool folderSelectionSupported = false;
 std::unordered_map<int64_t, Completion> completions;
 
 void Complete(int64_t id, const char* value, int fd = -1)
@@ -44,6 +45,7 @@ void DisposeDispatcher(void* value)
         if (dispatcher != handle)
             return;
         dispatcher = nullptr;
+        folderSelectionSupported = false;
         completions.swap(cancelled);
     }
     if (handle != nullptr)
@@ -84,11 +86,13 @@ napi_value Error(napi_env env, const char* message)
 
 napi_value RegisterSystemRequests(napi_env env, napi_callback_info info)
 {
-    size_t count = 1;
-    napi_value handler;
+    size_t count = 2;
+    napi_value args[2];
     napi_valuetype type;
-    if (napi_get_cb_info(env, info, &count, &handler, nullptr, nullptr) != napi_ok || count != 1 ||
-        napi_typeof(env, handler, &type) != napi_ok || type != napi_function)
+    bool supportsFolders = false;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count < 1 ||
+        napi_typeof(env, args[0], &type) != napi_ok || type != napi_function ||
+        (count == 2 && napi_get_value_bool(env, args[1], &supportsFolders) != napi_ok))
         return Error(env, "A system request handler is required.");
 
     std::lock_guard lock(requestsMutex);
@@ -98,7 +102,7 @@ napi_value RegisterSystemRequests(napi_env env, napi_callback_info info)
     napi_value name;
     napi_threadsafe_function handle = nullptr;
     if (napi_create_string_utf8(env, "Avalonia system requests", NAPI_AUTO_LENGTH, &name) != napi_ok ||
-        napi_create_threadsafe_function(env, handler, nullptr, name, 0, 1, nullptr, nullptr, nullptr,
+        napi_create_threadsafe_function(env, args[0], nullptr, name, 0, 1, nullptr, nullptr, nullptr,
             Dispatch, &handle) != napi_ok)
         return Error(env, "Could not create the system request handler.");
     if (napi_unref_threadsafe_function(env, handle) != napi_ok ||
@@ -107,6 +111,7 @@ napi_value RegisterSystemRequests(napi_env env, napi_callback_info info)
         return Error(env, "Could not register the system request handler.");
     }
     dispatcher = handle;
+    folderSelectionSupported = supportsFolders;
     return nullptr;
 }
 
@@ -189,4 +194,10 @@ extern "C" int32_t avaoh_system_request(int64_t id, const char* operation, const
     } catch (...) {
         return 0;
     }
+}
+
+extern "C" int32_t avaoh_can_pick_folders()
+{
+    std::lock_guard lock(AvaloniaOpenHarmony::requestsMutex);
+    return AvaloniaOpenHarmony::folderSelectionSupported ? 1 : 0;
 }

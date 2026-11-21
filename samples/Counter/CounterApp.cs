@@ -8,6 +8,7 @@ using Avalonia.Layout;
 using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Platform.Storage;
 using Avalonia.Themes.Simple;
+using Avalonia.VisualTree;
 
 namespace Counter;
 
@@ -98,6 +99,8 @@ public sealed class CounterApp : Application
             open.Click += async (_, _) => await RunAsync(() => OpenFileAsync(editor, ReportStatus), ReportStatus);
             var save = new Button { Content = "Save sample text" };
             save.Click += async (_, _) => await RunAsync(() => SaveFileAsync(editor, ReportStatus), ReportStatus);
+            var folder = new Button { Content = "Choose folder" };
+            folder.Click += async (_, _) => await RunAsync(() => OpenFolderAsync(editor, ReportStatus), ReportStatus);
             var link = new Button { Content = "Open Avalonia website" };
             link.Click += async (_, _) => await RunAsync(async () =>
             {
@@ -116,7 +119,7 @@ public sealed class CounterApp : Application
                     text,
                     editor,
                     picker,
-                    new WrapPanel { Children = { copy, open, save, link } },
+                    new WrapPanel { Children = { copy, open, save, folder, link } },
                     status
                 }
             };
@@ -129,30 +132,54 @@ public sealed class CounterApp : Application
             border.AddHandler(InputElement.PointerWheelChangedEvent, (_, args) =>
                 Trace($"Wheel: {args.Delta.X:F2} {args.Delta.Y:F2}"),
                 RoutingStrategies.Tunnel, handledEventsToo: true);
-            ObserveTopLevel(border);
+            ObserveTopLevel(border, ("Count button", button), ("Editor", editor), ("ComboBox", picker),
+                ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link));
             lifetime.MainView = border;
         }
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static void ObserveTopLevel(Control content)
+    private static void ObserveTopLevel(Control content, params (string Name, Control Element)[] targets)
     {
         TopLevel? current = null;
+        string? lastLayout = null;
         void ScaleChanged(object? sender, EventArgs args) => Trace($"DPI scale: {current?.RenderScaling:F2}");
+        void BackRequested(object? sender, RoutedEventArgs args) => Trace("System Back received");
         content.AttachedToVisualTree += (_, _) =>
         {
             current = TopLevel.GetTopLevel(content);
             if (current is not null)
             {
                 current.ScalingChanged += ScaleChanged;
+                current.BackRequested += BackRequested;
                 ScaleChanged(null, EventArgs.Empty);
             }
         };
         content.DetachedFromVisualTree += (_, _) =>
         {
             if (current is not null)
+            {
                 current.ScalingChanged -= ScaleChanged;
+                current.BackRequested -= BackRequested;
+            }
             current = null;
+            lastLayout = null;
+        };
+        content.LayoutUpdated += (_, _) =>
+        {
+            if (current is null || targets.Any(target => target.Element.Bounds.Width <= 0))
+                return;
+            var positions = string.Join(" | ", targets.Select(target =>
+            {
+                var size = target.Element.Bounds.Size;
+                var center = target.Element.PointToScreen(new Point(size.Width / 2, size.Height / 2));
+                return $"{target.Name} {center.X},{center.Y}";
+            }));
+            if (positions != lastLayout)
+            {
+                lastLayout = positions;
+                Trace($"Control positions: {positions}");
+            }
         };
     }
 
@@ -205,6 +232,30 @@ public sealed class CounterApp : Application
         await stream.WriteAsync(bytes);
         await stream.FlushAsync();
         report($"Wrote {bytes.Length} bytes");
+    }
+
+    private static async Task OpenFolderAsync(Control control, Action<string> report)
+    {
+        var storage = TopLevel.GetTopLevel(control)?.StorageProvider;
+        if (storage?.CanPickFolder != true)
+        {
+            report("Folder picker unavailable");
+            return;
+        }
+        var selection = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose a folder" });
+        using var folder = selection.FirstOrDefault();
+        if (folder is null)
+        {
+            report("Folder picker closed");
+            return;
+        }
+        var count = 0;
+        await foreach (var item in folder.GetItemsAsync())
+        {
+            using (item)
+                count++;
+        }
+        report($"Read {count} directory entries");
     }
 
     private static async Task RunAsync(Func<Task> action, Action<string> report)

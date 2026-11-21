@@ -58,7 +58,12 @@ $symbols = $symbolOutput -join "`n"
 if ($LASTEXITCODE -ne 0 -or $symbols -notmatch "Machine:.*$machine") {
     throw "The managed application must be $Abi ELF."
 }
-foreach ($export in @('avaoh_resize', 'avaoh_destroy', 'avaoh_touch')) {
+$counterExports = @(
+    'avaoh_resize', 'avaoh_destroy', 'avaoh_touch',
+    'avaoh_set_lifecycle', 'avaoh_set_theme', 'avaoh_set_displays', 'avaoh_set_window_position',
+    'avaoh_set_surface_offset', 'avaoh_request_back'
+)
+foreach ($export in $counterExports) {
     if ($symbols -notmatch "\b$export\b") { throw "The NativeAOT application is missing $export." }
 }
 

@@ -8,6 +8,8 @@ class SurfaceController extends XComponentController {
   private mouseX: number = 0;
   private mouseY: number = 0;
   private metaPressed: boolean = false;
+  readScale: () => number = (): number => 1;
+  geometryChanged: () => void = (): void => {};
 
   onSurfaceCreated(surfaceId: string): void {
     this.surfaceId = surfaceId;
@@ -18,7 +20,9 @@ class SurfaceController extends XComponentController {
       return;
     }
     try {
+      this.scale = this.readScale();
       bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale);
+      this.geometryChanged();
     } catch (error) {
       hilog.error(0x0202, 'AvaloniaOHOS', '%{public}s', (error as Error).message);
     }
@@ -169,22 +173,39 @@ struct CounterPage {
   private surface: SurfaceController = new SurfaceController();
 
   aboutToAppear(): void {
-    this.surface.scale = this.getUIContext().vp2px(1);
+    this.surface.readScale = (): number => this.getUIContext().vp2px(1);
+    this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
+  }
+
+  onBackPress(): boolean {
+    return bridge.requestBack();
+  }
+
+  private updateSurfaceOrigin(): void {
+    const surfaceId = this.surface.surfaceId;
+    if (surfaceId) {
+      try {
+        const info = this.getUIContext().getComponentUtils().getRectangleById('avalonia-surface');
+        bridge.setSurfaceOffset(surfaceId, Math.round(info.windowOffset.x), Math.round(info.windowOffset.y));
+      } catch (error) {
+        hilog.warn(0x0202, 'AvaloniaOHOS', 'Surface position: %{public}s', (error as Error).message);
+      }
+    }
   }
 
   build() {
-    Stack() {
+    Column() {
       XComponent({ id: 'avalonia', type: XComponentType.SURFACE, controller: this.surface })
-        .id('avalonia')
+        .id('avalonia-surface')
         .width('100%')
-        .height('100%')
+        .layoutWeight(1)
         .focusable(true)
         .focusOnTouch(true)
         .defaultFocus(true)
         .onTouch((event: TouchEvent) => this.surface.onTouch(event))
         .onMouse((event: MouseEvent): void => {
           if (event.action === MouseAction.Press && event.source === SourceType.Mouse) {
-            this.getUIContext().getFocusController().requestFocus('avalonia');
+            this.getUIContext().getFocusController().requestFocus('avalonia-surface');
           }
           this.surface.onHardwareMouse(event);
         })
@@ -192,6 +213,16 @@ struct CounterPage {
         .onAxisEvent((event: AxisEvent) => this.surface.onHardwareAxis(event))
         .onKeyEvent((event: KeyEvent): boolean => this.surface.onHardwareKey(event))
         .onBlur(() => this.surface.onHardwareBlur())
+        .onAreaChange((_previous: Area, _current: Area) => this.updateSurfaceOrigin())
+      Row() {
+        PasteButton()
+          .id('system-paste')
+          .onClick((_event: ClickEvent, result: PasteButtonOnClickResult): void => {
+            if (result === PasteButtonOnClickResult.SUCCESS) {
+              bridge.requestPaste();
+            }
+          })
+      }.width('100%').justifyContent(FlexAlign.End).padding(12)
     }.width('100%').height('100%')
   }
 }

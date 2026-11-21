@@ -14,7 +14,7 @@ using Avalonia.Threading;
 namespace Avalonia.OpenHarmony;
 
 /// <summary>Hosts one Avalonia view on the application UI dispatcher and an external framebuffer.</summary>
-public sealed class OpenHarmonyHost
+public sealed partial class OpenHarmonyHost
 {
     public delegate void PresentFrame(long surface, IntPtr pixels, int width, int height, int rowBytes);
 
@@ -39,12 +39,25 @@ public sealed class OpenHarmonyHost
 
     public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
         Func<int>? getInputWindowId)
-        : this(configure, present, reportError, getInputWindowId, null, null)
+        : this(configure, present, reportError, getInputWindowId, PlatformThemeVariant.Light)
     {
     }
 
     public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
         Func<int>? getInputWindowId, ILauncher? launcher, IStorageProvider? storageProvider)
+        : this(configure, present, reportError, getInputWindowId, PlatformThemeVariant.Light, launcher, storageProvider)
+    {
+    }
+
+    public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
+        Func<int>? getInputWindowId, PlatformThemeVariant initialTheme)
+        : this(configure, present, reportError, getInputWindowId, initialTheme, null, null)
+    {
+    }
+
+    public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
+        Func<int>? getInputWindowId, PlatformThemeVariant initialTheme, ILauncher? launcher,
+        IStorageProvider? storageProvider)
     {
         ArgumentNullException.ThrowIfNull(configure);
         _present = present ?? throw new ArgumentNullException(nameof(present));
@@ -52,6 +65,7 @@ public sealed class OpenHarmonyHost
         _getInputWindowId = getInputWindowId;
         _launcher = launcher;
         _storageProvider = storageProvider;
+        _settings = new OpenHarmonyPlatformSettings(initialTheme);
         new Thread(() => Run(configure))
         {
             IsBackground = true,
@@ -81,14 +95,15 @@ public sealed class OpenHarmonyHost
                 CloseSurface();
                 var compositor = AvaloniaLocator.Current.GetRequiredService<Compositor>();
                 _topLevel = new SurfaceTopLevel(surface, compositor, _present, _getInputWindowId, _reportError,
-                    _launcher, _storageProvider);
+                    _screens, _launcher, _storageProvider);
                 try
                 {
                     _topLevel.Resize(width, height, scaling);
                     _root = new EmbeddableControlRoot(_topLevel);
                     _root.Content = _lifetime.MainView;
                     _root.Prepare();
-                    _root.StartRendering();
+                    UpdateSurfaceOrigin();
+                    RefreshRendering();
                 }
                 catch
                 {
@@ -111,7 +126,8 @@ public sealed class OpenHarmonyHost
     {
         if (_root != null)
         {
-            _root.StopRendering();
+            if (_rendering)
+                _root.StopRendering();
             _root.Content = null;
             _root.Dispose();
         }
@@ -121,6 +137,8 @@ public sealed class OpenHarmonyHost
         }
         _root = null;
         _topLevel = null;
+        _rendering = false;
+        _surfaceOffset = default;
     }
 
     public void Touch(long surface, long contact, TouchPhase phase, double x, double y) =>
@@ -210,7 +228,8 @@ public sealed class OpenHarmonyHost
     private void InitializePlatform()
     {
         var locator = AvaloniaLocator.CurrentMutable;
-        locator.Bind<IPlatformSettings>().ToSingleton<DefaultPlatformSettings>();
+        locator.Bind<IPlatformSettings>().ToConstant(_settings);
+        locator.Bind<IActivatableLifetime>().ToConstant(_lifetime);
         locator.Bind<IKeyboardDevice>().ToSingleton<KeyboardDevice>();
         locator.Bind<PlatformHotkeyConfiguration>().ToSingleton<PlatformHotkeyConfiguration>();
         locator.Bind<ICursorFactory>().ToSingleton<CursorFactory>();
@@ -239,10 +258,13 @@ public sealed class OpenHarmonyHost
             catch (Exception exception) { _reportError(exception.ToString()); }
         }, DispatcherPriority.Input);
 
-    private sealed class SingleViewLifetime : ISingleViewApplicationLifetime
+    private sealed class SingleViewLifetime : ISingleViewApplicationLifetime, IActivatableLifetime
     {
         private Control? _mainView;
+        private bool? _reportedForeground;
         public event Action<Control?>? MainViewChanged;
+        public event EventHandler<ActivatedEventArgs>? Activated;
+        public event EventHandler<ActivatedEventArgs>? Deactivated;
         public Control? MainView
         {
             get => _mainView;
@@ -252,6 +274,21 @@ public sealed class OpenHarmonyHost
                 MainViewChanged?.Invoke(value);
             }
         }
+
+        public void ReportForeground(bool foreground)
+        {
+            if (_reportedForeground == foreground)
+                return;
+            _reportedForeground = foreground;
+            var args = new ActivatedEventArgs(ActivationKind.Background);
+            if (foreground)
+                Activated?.Invoke(this, args);
+            else
+                Deactivated?.Invoke(this, args);
+        }
+
+        public bool TryEnterBackground() => false;
+        public bool TryLeaveBackground() => false;
     }
 
     private sealed class WindowingPlatform(OpenHarmonyHost host) : IWindowingPlatform
