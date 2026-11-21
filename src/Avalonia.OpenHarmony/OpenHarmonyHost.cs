@@ -81,7 +81,7 @@ public sealed partial class OpenHarmonyHost
     /// <summary>Pastes into the focused Avalonia text box after a successful ArkUI PasteButton authorization.</summary>
     public void PasteToFocusedTextBox() => Post(() =>
     {
-        if (_root?.FocusManager?.GetFocusedElement() is TextBox { IsReadOnly: false } textBox)
+        if (FocusedWindowElement() is TextBox { IsReadOnly: false } textBox)
             textBox.Paste();
     });
 
@@ -90,6 +90,11 @@ public sealed partial class OpenHarmonyHost
         {
             if (surface <= 0 || width <= 0 || height <= 0)
                 return;
+            if (AvaloniaLocator.Current.GetService<OpenHarmonyWindowOptions>() is { } windowOptions)
+            {
+                UpdateStageSurface(windowOptions, surface, width, height, scaling);
+                return;
+            }
             if (_topLevel?.Surface != surface)
             {
                 if (_topLevel != null && _topLevel.Surface > surface)
@@ -172,14 +177,14 @@ public sealed partial class OpenHarmonyHost
     public void DestroySurface(long surface) =>
         Post(() =>
         {
-            if (_topLevel?.Surface == surface)
+            if (!DetachStageSurface(surface) && _topLevel?.Surface == surface)
                 CloseSurface();
         });
 
     private void CloseSurface()
     {
-        CloseAccessibility();
-        _accessibilityRegistration = 0;
+        if (_topLevel is { } topLevel)
+            CloseAccessibility(topLevel.Surface);
         if (_root != null)
         {
             if (_rendering)
@@ -199,20 +204,13 @@ public sealed partial class OpenHarmonyHost
     }
 
     public void Touch(long surface, long contact, TouchPhase phase, double x, double y) =>
-        Post(() =>
-        {
-            if (_topLevel?.Surface == surface)
-                _topLevel.Touch(contact, phase, x, y);
-        });
+        Post(() => FindInputSurface(surface)?.Touch(contact, phase, x, y));
 
     /// <summary>Queues hardware pointer input. Position is in physical pixels and wheel deltas are in Avalonia wheel units.</summary>
     public void HardwarePointer(long surface, int phase, int button, double x, double y,
         double wheelX, double wheelY, int modifiers) =>
-        Post(() =>
-        {
-            if (_topLevel?.Surface == surface)
-                _topLevel.HardwarePointer(phase, button, x, y, wheelX, wheelY, (RawInputModifiers)modifiers);
-        });
+        Post(() => FindInputSurface(surface)?.HardwarePointer(phase, button, x, y, wheelX, wheelY,
+            (RawInputModifiers)modifiers));
 
     /// <summary>Queues an ArkUI hardware key and reports whether its key code or printable text is supported.</summary>
     public bool HardwareKey(long surface, bool down, int keyCode, int modifiers, int unicode, int locks)
@@ -223,22 +221,21 @@ public sealed partial class OpenHarmonyHost
         if (key == default && text == null)
             return false;
 
-        Post(() =>
-        {
-            if (_topLevel?.Surface == surface)
-                _topLevel.HardwareKey(down, key, keyModifiers, text);
-        });
+        Post(() => FindInputSurface(surface)?.HardwareKey(down, key, keyModifiers, text));
         return true;
     }
 
     public void HardwareInputBlur(long surface) =>
         Post(() =>
         {
-            if (_topLevel?.Surface == surface)
-            {
-                _topLevel.CancelHardwarePointer();
-                _root?.FocusManager.Focus(null);
-            }
+            var target = FindInputSurface(surface);
+            if (target is null)
+                return;
+            target.CancelHardwarePointer();
+            if (_root is { } root && target == _topLevel)
+                root.FocusManager.Focus(null);
+            else
+                target.LostFocus?.Invoke();
         });
 
     private void Run(Func<AppBuilder> configure)
@@ -251,6 +248,8 @@ public sealed partial class OpenHarmonyHost
             {
                 if (_root != null)
                     _root.Content = view;
+                if (_stageRoot != null)
+                    _stageRoot.Content = view;
             };
 
             configure()
@@ -291,7 +290,8 @@ public sealed partial class OpenHarmonyHost
         locator.Bind<PlatformHotkeyConfiguration>().ToSingleton<PlatformHotkeyConfiguration>();
         locator.Bind<ICursorFactory>().ToSingleton<CursorFactory>();
         locator.Bind<IRenderLoop>().ToConstant(RenderLoop.FromTimer(new UiThreadRenderTimer(60)));
-        locator.Bind<IWindowingPlatform>().ToConstant(new WindowingPlatform(this));
+        locator.Bind<IWindowingPlatform>().ToConstant(new OpenHarmonyChildWindowingPlatform(CreateOwnedWindow,
+            () => _topLevel ?? throw new InvalidOperationException("The XComponent surface is not available.")));
         locator.Bind<IPlatformGraphics?>().ToFunc(() => _topLevel is { UsesEgl: true } ? _egl?.Graphics : null);
         locator.Bind<Compositor>().ToConstant(new Compositor(null));
     }
@@ -347,16 +347,6 @@ public sealed partial class OpenHarmonyHost
 
         public bool TryEnterBackground() => false;
         public bool TryLeaveBackground() => false;
-    }
-
-    private sealed class WindowingPlatform(OpenHarmonyHost host) : IWindowingPlatform
-    {
-        public IWindowImpl CreateWindow() => throw new PlatformNotSupportedException("OpenHarmony currently hosts one embedded view.");
-        public IWindowImpl CreateEmbeddableWindow() => CreateWindow();
-        public ITopLevelImpl CreateEmbeddableTopLevel() =>
-            host._topLevel ?? throw new InvalidOperationException("The XComponent surface is not available.");
-        public ITrayIconImpl? CreateTrayIcon() => null;
-        public void GetWindowsZOrder(ReadOnlySpan<IWindowImpl> windows, Span<long> zOrder) => zOrder.Clear();
     }
 
     private sealed class CursorFactory : ICursorFactory

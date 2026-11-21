@@ -51,6 +51,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     }
 
     public long Surface { get; }
+    internal TopLevel? ControlRoot => _inputRoot?.FocusRoot as TopLevel;
     public Compositor Compositor { get; }
     public IPlatformRenderSurface[] Surfaces { get; }
     public bool UsesEgl => _eglWindow is not null;

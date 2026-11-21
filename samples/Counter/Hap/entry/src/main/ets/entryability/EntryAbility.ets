@@ -16,7 +16,7 @@ export default class EntryAbility extends UIAbility {
       bridge.configureFiles(this.context.filesDir);
       const mainWindow = windowStage.getMainWindowSync();
       bridge.configureInputMethod(mainWindow.getWindowProperties().id);
-      this.stopSystemRequests = registerSystemRequests(this.context, mainWindow);
+      this.stopSystemRequests = registerSystemRequests(this.context, mainWindow, windowStage);
       updateTheme(this.context.config);
       this.configured = true;
       if (this.foreground !== undefined) {

@@ -9,7 +9,8 @@ param(
     [string]$HvigorHome,
     [string]$OhPmHome,
     [switch]$StageOnly,
-    [switch]$UseEgl
+    [switch]$UseEgl,
+    [switch]$Windowed
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,8 +31,10 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $runtimeCommit) {
 }
 
 $rid, $machine = if ($Abi -eq 'x86_64') { 'linux-musl-x64', 'X86-64' } else { 'linux-musl-arm64', 'AArch64' }
-$renderingSuffix = if ($UseEgl) { '/egl' } else { '' }
+if ($UseEgl -and $Windowed) { throw 'The windowed Counter currently uses software rendering.' }
+$renderingSuffix = if ($UseEgl) { '/egl' } elseif ($Windowed) { '/windowed' } else { '' }
 $useEglValue = $UseEgl.IsPresent.ToString().ToLowerInvariant()
+$useWindowedValue = $Windowed.IsPresent.ToString().ToLowerInvariant()
 $build = Join-Path $repository "artifacts/build/$Abi$renderingSuffix"
 $managed = Join-Path $build 'managed'
 $hap = Join-Path $build 'Hap'
@@ -46,6 +49,7 @@ Push-Location $repository
 try {
     & dotnet publish (Join-Path $sample 'Counter.csproj') -c Release -r $rid -o $managed `
         '-p:OpenHarmonyBuild=true' '-p:OpenHarmonyApiLevel=26' "-p:OpenHarmonyAbi=$Abi" "-p:AvaloniaUseEgl=$useEglValue" `
+        "-p:AvaloniaUseOwnedWindows=$useWindowedValue" `
         "-p:OpenHarmonyNetRoot=$OpenHarmonyNetRoot" "-p:OpenHarmonySdkRoot=$sdk" "-p:OpenHarmonyNativeRoot=$native" `
         "-p:ArtifactsPath=$build/dotnet" "-p:RestorePackagesPath=$NuGetRoot" -m:1 -nr:false
     if ($LASTEXITCODE -ne 0) { throw 'The Counter NativeAOT publish failed.' }
@@ -67,7 +71,9 @@ $counterExports = @(
     'avaoh_set_lifecycle', 'avaoh_set_theme', 'avaoh_set_displays', 'avaoh_set_window_position',
     'avaoh_set_surface_offset', 'avaoh_request_back',
     'avaoh_set_avoid_area', 'avaoh_set_window_inset_properties', 'avaoh_clear_window_insets',
-    'avaoh_accessibility_configure', 'avaoh_accessibility_invoke'
+    'avaoh_accessibility_configure', 'avaoh_accessibility_invoke',
+    'avaoh_update_child_surface', 'avaoh_close_child_surface', 'avaoh_report_child_frame',
+    'avaoh_report_child_event', 'avaoh_request_child_close'
 )
 foreach ($export in $counterExports) {
     if ($symbols -notmatch "\b$export\b") { throw "The NativeAOT application is missing $export." }

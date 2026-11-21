@@ -71,6 +71,8 @@ public sealed partial class OpenHarmonyHost
         {
             var changed = _screens.Replace(snapshot);
             UpdateSurfaceOrigin();
+            foreach (var child in _children.Values.ToArray())
+                RefreshChildOrigin(child);
             if (changed)
                 _screens.NotifyChanged();
         });
@@ -89,7 +91,13 @@ public sealed partial class OpenHarmonyHost
     /// <summary>Updates the XComponent origin in pixels relative to the hosted window.</summary>
     public void SetSurfaceOffset(long surface, PixelPoint offset) => Post(() =>
     {
-        if (_topLevel?.Surface != surface)
+        if (_childSurfaces.TryGetValue(surface, out var child))
+        {
+            child.Offset = offset;
+            RefreshChildOrigin(child);
+            return;
+        }
+        if ((_stageRoute?.Token ?? _topLevel?.Surface) != surface)
             return;
         _surfaceOffset = offset;
         _hasSurfaceOffset = true;
@@ -136,7 +144,9 @@ public sealed partial class OpenHarmonyHost
         if (_windowFocused == focused)
             return;
         _windowFocused = focused;
-        if (!focused)
+        if (_stageRoute is { } stage)
+            stage.Window.ReportFocus(focused && _applicationForeground);
+        else if (!focused)
             _topLevel?.LostFocus?.Invoke();
     }
 
@@ -146,14 +156,28 @@ public sealed partial class OpenHarmonyHost
         if (!foreground)
             SetWindowFocus(false);
         RefreshRendering();
+        foreach (var child in _children.Values.ToArray())
+        {
+            child.Window.ReportVisible(foreground && child.Visible);
+            if (!foreground)
+                child.Focused = false;
+            RefreshChildInputMethod(child);
+        }
         _lifetime.ReportForeground(foreground);
     }
 
     private void RefreshRendering()
     {
+        var render = _applicationForeground && _windowVisible;
+        if (_stageRoute is { } stage)
+        {
+            _rendering = render && stage.Token != 0;
+            stage.Window.Surface.SetInputMethodActive(_rendering && _windowFocused);
+            stage.Window.ReportVisible(_rendering);
+            return;
+        }
         if (_root is null)
             return;
-        var render = _applicationForeground && _windowVisible;
         if (_rendering == render)
             return;
         if (render)
@@ -171,7 +195,10 @@ public sealed partial class OpenHarmonyHost
     private void UpdateSurfaceOrigin()
     {
         if (_topLevel is { } topLevel)
+        {
             topLevel.ScreenOrigin = _screens.HostOrigin + _windowPosition + _surfaceOffset;
+            _stageRoute?.Window.ReportFrame(new PixelRect(_screens.HostOrigin + _windowPosition, topLevel.PixelSize));
+        }
     }
 
     private sealed class BackRequest

@@ -65,8 +65,24 @@ struct Registration {
 };
 
 std::mutex StateLock;
-std::unique_ptr<Registration> Current;
+std::unordered_map<int64_t, std::unique_ptr<Registration>> Registrations;
 int64_t NextRegistration = 0;
+
+Registration* FindRegistration(int64_t surface)
+{
+    const auto entry = Registrations.find(surface);
+    return entry == Registrations.end() ? nullptr : entry->second.get();
+}
+
+Registration* FindRegistration(const char* instance)
+{
+    if (instance == nullptr)
+        return nullptr;
+    const auto entry = std::find_if(Registrations.begin(), Registrations.end(), [instance](const auto& item) {
+        return item.second->instance == instance;
+    });
+    return entry == Registrations.end() ? nullptr : entry->second.get();
+}
 
 struct Query {
     std::shared_ptr<const Tree> tree;
@@ -77,9 +93,10 @@ struct Query {
 Query Read(const char* instance)
 {
     std::lock_guard lock(StateLock);
-    if (!instance || !Current || Current->instance != instance)
+    const auto* registration = FindRegistration(instance);
+    if (registration == nullptr)
         return {};
-    return {Current->tree, Current->origin, Current->focus};
+    return {registration->tree, registration->origin, registration->focus};
 }
 
 const Node* Find(const Tree& tree, int64_t id)
@@ -223,25 +240,27 @@ int32_t Execute(const char* instance, int64_t id, ArkUI_Accessibility_ActionType
     ArkUI_AccessibilityActionArguments*, int32_t)
 {
     std::lock_guard lock(StateLock);
-    if (!instance || !Current || Current->instance != instance || !Current->tree) return Missing;
-    const auto* node = Find(*Current->tree, id);
+    auto* registration = FindRegistration(instance);
+    if (!registration || !registration->tree) return Missing;
+    const auto* node = Find(*registration->tree, id);
     if (!node || !Navigable(*node)) return Missing;
     if (action == GainFocus || action == ClearFocus) {
-        if (action == GainFocus) Current->focus = node->id;
-        else if (Current->focus == node->id) Current->focus = 0;
+        if (action == GainFocus) registration->focus = node->id;
+        else if (registration->focus == node->id) registration->focus = 0;
         return Ok;
     }
     if (action != Click || !Actionable(*node)) return Missing;
     // This callback queues work on the Avalonia dispatcher and does not call back into this bridge.
-    Current->invoke(Current->surface, Current->generation, node->id);
+    registration->invoke(registration->surface, registration->generation, node->id);
     return Ok;
 }
 
 int32_t ClearFocused(const char* instance)
 {
     std::lock_guard lock(StateLock);
-    if (!instance || !Current || Current->instance != instance) return Missing;
-    Current->focus = 0;
+    auto* registration = FindRegistration(instance);
+    if (!registration) return Missing;
+    registration->focus = 0;
     return Ok;
 }
 
@@ -271,12 +290,14 @@ int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surf
     if (!configure || !invoke)
         return Invalid;
     const ArkUI_IntOffset origin{screenX, screenY};
+    int64_t generation;
     {
         std::lock_guard lock(StateLock);
-        if (Current && Current->surface == surface) {
-            Current->origin = origin;
+        if (auto* current = FindRegistration(surface)) {
+            current->origin = origin;
             return Ok;
         }
+        generation = ++NextRegistration;
     }
 
     ArkUI_NodeContentHandle content = nullptr;
@@ -291,7 +312,6 @@ int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surf
         api->disposeNode(node);
         return Missing;
     }
-    const int64_t generation = ++NextRegistration;
     auto registration = std::make_unique<Registration>(Registration{
         surface, generation, "avalonia-" + std::to_string(generation), api, content, node, configure, invoke, origin,
         nullptr});
@@ -305,9 +325,15 @@ int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surf
         api->disposeNode(node);
         return result;
     }
+    bool added;
     {
         std::lock_guard lock(StateLock);
-        Current = std::move(registration);
+        added = Registrations.try_emplace(surface, std::move(registration)).second;
+    }
+    if (!added) {
+        OH_ArkUI_NodeContent_RemoveNode(content, node);
+        api->disposeNode(node);
+        return Ok;
     }
     configure(surface, generation, 1);
     return Ok;
@@ -318,7 +344,11 @@ void accessibility::Detach(int64_t surface)
     std::unique_ptr<Registration> previous;
     {
         std::lock_guard lock(StateLock);
-        if (Current && Current->surface == surface) previous = std::move(Current);
+        const auto entry = Registrations.find(surface);
+        if (entry != Registrations.end()) {
+            previous = std::move(entry->second);
+            Registrations.erase(entry);
+        }
     }
     if (previous) {
         previous->configure(surface, previous->generation, 0);
@@ -333,7 +363,8 @@ extern "C" void avaoh_submit_accessibility(int64_t surface, int64_t generation, 
     try {
         {
             std::lock_guard lock(StateLock);
-            if (!Current || Current->surface != surface || Current->generation != generation) return;
+            const auto* registration = FindRegistration(surface);
+            if (!registration || registration->generation != generation) return;
         }
         auto tree = std::make_shared<Tree>();
         tree->order.reserve(count);
@@ -357,9 +388,10 @@ extern "C" void avaoh_submit_accessibility(int64_t surface, int64_t generation, 
             tree->order.push_back(source.id);
         }
         std::lock_guard lock(StateLock);
-        if (!Current || Current->surface != surface || Current->generation != generation) return;
-        if (tree->nodes.find(Current->focus) == tree->nodes.end()) Current->focus = 0;
-        Current->tree = std::move(tree);
+        auto* registration = FindRegistration(surface);
+        if (!registration || registration->generation != generation) return;
+        if (tree->nodes.find(registration->focus) == tree->nodes.end()) registration->focus = 0;
+        registration->tree = std::move(tree);
     } catch (...) {
         // Keep the previous complete snapshot when a replacement cannot be built.
     }

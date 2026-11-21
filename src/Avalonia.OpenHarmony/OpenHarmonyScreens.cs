@@ -52,6 +52,9 @@ internal sealed class OpenHarmonyScreens : IScreenImpl
     public IReadOnlyList<Screen> AllScreens => _all;
     public Action? Changed { get; set; }
     public PixelPoint HostOrigin => HostScreen?.Bounds.Position ?? default;
+    public PixelPoint OriginOfDisplay(long id) => _screens.TryGetValue(id, out var screen)
+        ? screen.Bounds.Position
+        : default;
 
     private Screen? HostScreen => _hostDisplay is { } id && _screens.TryGetValue(id, out var screen)
         ? screen
@@ -100,8 +103,15 @@ internal sealed class OpenHarmonyScreens : IScreenImpl
 
     public void NotifyChanged() => Changed?.Invoke();
 
-    public Screen? ScreenFromWindow(IWindowBaseImpl window) => null;
-    public Screen? ScreenFromTopLevel(ITopLevelImpl topLevel) => topLevel is SurfaceTopLevel ? HostScreen : null;
+    public Screen? ScreenFromWindow(IWindowBaseImpl window) => window is OpenHarmonyChildWindow child
+        ? ScreenFromRect(new PixelRect(child.Position, child.Surface.PixelSize)) ?? HostScreen
+        : null;
+    public Screen? ScreenFromTopLevel(ITopLevelImpl topLevel) => topLevel switch
+    {
+        IWindowBaseImpl window => ScreenFromWindow(window),
+        SurfaceTopLevel => HostScreen,
+        _ => null
+    };
     public Screen? ScreenFromPoint(PixelPoint point) =>
         _all.FirstOrDefault(screen => screen.Bounds.ContainsExclusive(point));
     public Screen? ScreenFromRect(PixelRect rect) => _all

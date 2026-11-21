@@ -150,9 +150,14 @@ accessibility query while the original XComponent controller still opened its Na
 touch. A separate managed probe verified names, physical bounds, focus, disabled state, and Invoke on the actual
 AudioSynx Arc view. The combined Avalonia device path still needs a HAP acceptance run.
 
+### Owned windows
+
+Use the optional windowed stage to show native Avalonia child windows and modal dialogs.
+[Owned window integration](docs/owned-windows.md)
+
 ## Compatibility
 
-The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its scope is a
+The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its default application model uses a
 single embedded Avalonia view with software rendering or opt-in Skia EGL, resizing and in-surface popups, touch, mouse and hardware
 keyboard input, optional system text input, clipboard, and system file and link operations. Applications own their
 service and settings lifetimes. The [platform verification matrix](docs/platform-validation.md) distinguishes
