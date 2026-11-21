@@ -1,0 +1,3 @@
+scripts/counter-licenses/*.txt text eol=lf
+# Preserve significant source formatting in the upstream Avalonia NOTICE.
+scripts/counter-licenses/Avalonia-NOTICES.txt whitespace=-blank-at-eol

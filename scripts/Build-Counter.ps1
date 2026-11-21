@@ -79,6 +79,37 @@ Copy-Item -LiteralPath $appLibrary -Destination $libs -Force
 $notices = Join-Path $hap 'entry/src/main/resources/rawfile/graphics-licenses'
 New-Item -ItemType Directory -Force -Path $notices | Out-Null
 Copy-Item -Path (Join-Path $libs 'licenses/*') -Destination $notices -Force
+
+$packageNotices = Join-Path $hap 'entry/src/main/resources/rawfile/licenses'
+New-Item -ItemType Directory -Force -Path $packageNotices | Out-Null
+Copy-Item -Path (Join-Path $PSScriptRoot 'counter-licenses/*.txt') -Destination $packageNotices -Force
+Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination (Join-Path $packageNotices 'Avalonia.OpenHarmony-LICENSE.txt') -Force
+Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY.md') -Destination (Join-Path $packageNotices 'THIRD-PARTY.txt') -Force
+Copy-Item -LiteralPath (Join-Path $OpenHarmonyNetRoot 'LICENSE') -Destination (Join-Path $packageNotices 'OpenHarmonyDotNet-LICENSE.txt') -Force
+Copy-Item -LiteralPath (Join-Path $native 'llvm/NOTICE') -Destination (Join-Path $packageNotices 'HarmonyOS-LLVM-NOTICES.txt') -Force
+
+$depsPath = Join-Path $build "dotnet/bin/Counter/release_$rid/libavalonia_ohos_app.deps.json"
+$deps = Get-Content -Raw -LiteralPath $depsPath | ConvertFrom-Json -AsHashtable
+$runtimeName = "Microsoft.NETCore.App.Runtime.$rid"
+$runtimePack = @($deps.libraries.Keys | Where-Object { $_ -like "runtimepack.$runtimeName/*" })
+if ($runtimePack.Count -ne 1 -or $runtimePack[0] -notmatch '/(\d+\.\d+\.\d+(?:-[\w.-]+)?)$') {
+    throw "Could not identify the restored .NET runtime pack from $depsPath."
+}
+$runtimeVersion = $Matches[1]
+$runtimeDirectory = Join-Path $NuGetRoot "$($runtimeName.ToLowerInvariant())/$runtimeVersion"
+# Keep the fork's 9.0.2 notices and include the Microsoft pack's originals if the contents differ.
+$runtimeNotices = [ordered]@{ 'LICENSE.TXT' = 'LICENSE'; 'THIRD-PARTY-NOTICES.TXT' = 'NOTICES' }
+foreach ($file in $runtimeNotices.Keys) {
+    $source = Join-Path $runtimeDirectory $file
+    $kind = $runtimeNotices[$file]
+    $baseline = Join-Path $packageNotices "DotNet-9.0.2-$kind.txt"
+    $additional = Join-Path $packageNotices "DotNet-MicrosoftPack-$kind.txt"
+    if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $baseline).Hash) {
+        Copy-Item -LiteralPath $source -Destination $additional -Force
+    } elseif (Test-Path -LiteralPath $additional -PathType Leaf) {
+        Remove-Item -LiteralPath $additional -Force
+    }
+}
 Write-Host "Staged DevEco project at $hap"
 if ($StageOnly) { return }
 
@@ -120,6 +151,22 @@ try {
         ForEach-Object { "libs/$Abi/$($_.Name)" }
     foreach ($entry in $required) {
         if ($archive.GetEntry($entry).Length -le 0) { throw "HAP is missing $entry." }
+    }
+    foreach ($directory in @($notices, $packageNotices)) {
+        $folder = Split-Path -Leaf $directory
+        foreach ($file in Get-ChildItem -LiteralPath $directory -File) {
+            $path = "resources/rawfile/$folder/$($file.Name)"
+            $entry = $archive.GetEntry($path)
+            if (!$entry -or $entry.Length -le 0) { throw "HAP is missing $path." }
+            $stream = $entry.Open()
+            try {
+                if ((Get-FileHash -InputStream $stream).Hash -ne (Get-FileHash -LiteralPath $file.FullName).Hash) {
+                    throw "HAP contains altered license text at $path."
+                }
+            } finally {
+                $stream.Dispose()
+            }
+        }
     }
     $profileReader = [IO.StreamReader]::new($archive.GetEntry('module.json').Open())
     try { $profile = $profileReader.ReadToEnd() | ConvertFrom-Json }

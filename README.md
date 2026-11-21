@@ -25,6 +25,7 @@ The build verifies the SDK, compiles the NativeAOT library, prepares the native 
 contents. It writes the unsigned HAP to `artifacts/packages/x86_64/debug/AvaloniaCounter-unsigned.hap`. Use
 `-Abi arm64-v8a` for the corresponding ARM64 build. Use `-StageOnly` to prepare a DevEco project under
 `artifacts/build/<abi>/Hap` and open it in DevEco Studio for signing and installation.
+Both methods stage the original license and notice texts described in [THIRD-PARTY.md](THIRD-PARTY.md).
 
 On Windows, run the same managed backend through a smoke check of framebuffer rendering and touch dispatch.
 
@@ -46,7 +47,8 @@ dotnet run --project samples/Counter/Counter.csproj
    Call `configureFiles(this.context.filesDir)` before creating the surface so Fontconfig can find HarmonyOS system
    fonts.
 4. Include the managed shared object and the graphics libraries prepared by `scripts/PrepareOpenHarmonyGraphics.ps1` in
-   `entry/libs/<abi>`. Include the graphics licensing files in the packaged resources.
+   `entry/libs/<abi>`. Include the applicable licensing files for the backend, runtime, SDK C++ library and graphics
+   dependencies in the packaged resources.
 
 `OpenHarmonyHost` runs on its own Avalonia dispatcher. Surface and touch callbacks can arrive on the ArkTS thread and
 are queued to that dispatcher. The frame callback receives a premultiplied RGBA8888 framebuffer whose address remains
