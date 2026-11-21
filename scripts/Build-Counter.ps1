@@ -10,6 +10,7 @@ param(
     [string]$OhPmHome,
     [switch]$StageOnly,
     [switch]$UseEgl,
+    [switch]$TraceImePreview,
     [switch]$Windowed
 )
 
@@ -33,9 +34,11 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $runtimeCommit) {
 $rid, $machine = if ($Abi -eq 'x86_64') { 'linux-musl-x64', 'X86-64' } else { 'linux-musl-arm64', 'AArch64' }
 if ($UseEgl -and $Windowed) { throw 'The windowed Counter currently uses software rendering.' }
 $renderingSuffix = if ($UseEgl) { '/egl' } elseif ($Windowed) { '/windowed' } else { '' }
+$diagnosticsSuffix = if ($TraceImePreview) { '/ime-preview' } else { '' }
 $useEglValue = $UseEgl.IsPresent.ToString().ToLowerInvariant()
+$traceImeValue = $TraceImePreview.IsPresent.ToString().ToLowerInvariant()
 $useWindowedValue = $Windowed.IsPresent.ToString().ToLowerInvariant()
-$build = Join-Path $repository "artifacts/build/$Abi$renderingSuffix"
+$build = Join-Path $repository "artifacts/build/$Abi$renderingSuffix$diagnosticsSuffix"
 $managed = Join-Path $build 'managed'
 $hap = Join-Path $build 'Hap'
 if (!$NuGetRoot) { $NuGetRoot = Join-Path $repository 'artifacts/cache/nuget' }
@@ -49,6 +52,7 @@ Push-Location $repository
 try {
     & dotnet publish (Join-Path $sample 'Counter.csproj') -c Release -r $rid -o $managed `
         '-p:OpenHarmonyBuild=true' '-p:OpenHarmonyApiLevel=26' "-p:OpenHarmonyAbi=$Abi" "-p:AvaloniaUseEgl=$useEglValue" `
+        "-p:AvaloniaTraceImePreview=$traceImeValue" `
         "-p:AvaloniaUseOwnedWindows=$useWindowedValue" `
         "-p:OpenHarmonyNetRoot=$OpenHarmonyNetRoot" "-p:OpenHarmonySdkRoot=$sdk" "-p:OpenHarmonyNativeRoot=$native" `
         "-p:ArtifactsPath=$build/dotnet" "-p:RestorePackagesPath=$NuGetRoot" -m:1 -nr:false
@@ -199,7 +203,7 @@ try {
     $archive.Dispose()
 }
 
-$packageDirectory = Join-Path $repository "artifacts/packages/$Abi/$BuildMode$renderingSuffix"
+$packageDirectory = Join-Path $repository "artifacts/packages/$Abi/$BuildMode$renderingSuffix$diagnosticsSuffix"
 New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
 $package = Join-Path $packageDirectory 'AvaloniaCounter-unsigned.hap'
 Copy-Item -LiteralPath $builtHap -Destination $package -Force

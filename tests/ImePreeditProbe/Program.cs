@@ -9,6 +9,7 @@ using Avalonia.OpenHarmony;
 using Avalonia.Themes.Simple;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
 var dll = NativeLibrary.Load(Path.GetFullPath(args[0]));
@@ -16,7 +17,9 @@ NativeLibrary.SetDllImportResolver(typeof(OpenHarmonyHost).Assembly, (name, _, _
     name == "libohinputmethod.so" ? dll : IntPtr.Zero);
 var mock = new MockInput(dll);
 var firstFrame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-var host = new OpenHarmonyHost(AppBuilder.Configure<ProbeApp>,
+var diagnostics = new ConcurrentQueue<string>();
+var host = new OpenHarmonyHost(() => AppBuilder.Configure<ProbeApp>()
+        .With(new OpenHarmonyInputDiagnostics(diagnostics.Enqueue) { TraceImePreview = true }),
     (_, _, _, _, _) => firstFrame.TrySetResult(), Console.Error.WriteLine, () => 17);
 
 host.UpdateSurface(1, 480, 300, 1);
@@ -160,6 +163,15 @@ await Ui(() => Equal("ex文ternal", model.Text));
 Console.WriteLine("Two-way model survives provisional text and external update, then receives only committed text");
 Console.WriteLine("Preview operations reject split UTF-16 surrogates and backspace removes the whole pair");
 
+Equal(true, diagnostics.Contains("IME preview config: supported=True result=0"));
+Equal(true, diagnostics.Contains("IME preview set: length=1 start=-1 end=-1 supported=True result=0"));
+Equal(true, diagnostics.Contains("IME preview set: length=7 start=0 end=1 supported=True result=401"));
+Equal(true, diagnostics.Contains("IME preview finish: length=3 start=1 end=4"));
+Equal(false, diagnostics.Any(message => message.Contains("outside") || message.Contains("候选") || message.Contains("确定")));
+int TextMetadataCount() => diagnostics.Count(message => message.StartsWith("IME preview ") ||
+    message.StartsWith("IME commit:") || message.StartsWith("IME backspace:") || message.StartsWith("IME forward delete:"));
+var textMetadataBeforePassword = TextMetadataCount();
+
 await Ui(() => ProbeApp.Password!.Focus());
 await Ui(() =>
 {
@@ -168,7 +180,14 @@ await Ui(() =>
     Equal("", mock.GetSurrounding(left: true, 20));
     Equal(null, GetPresenter(ProbeApp.Password!).PreeditText);
 });
+mock.Finish();
+mock.Insert("masked-probe");
+await Ui(() => Equal(true, ProbeApp.Password!.Text!.Contains("masked-probe")));
+mock.DeleteBackward(1);
+await Ui(() => Equal(false, ProbeApp.Password!.Text!.Contains("masked-probe")));
+Equal(textMetadataBeforePassword, TextMetadataCount());
 Console.WriteLine("PasswordChar disables SDK preedit support, rejects preview and hides surrounding data");
+Console.WriteLine("Opt-in IME preview diagnostics contain numeric metadata and omit password metadata");
 
 host.DestroySurface(1);
 await WaitUntil(() => Task.FromResult(mock.Attached == 0));

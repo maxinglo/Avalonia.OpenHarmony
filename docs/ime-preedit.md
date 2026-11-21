@@ -55,3 +55,15 @@ units. The control displayed 奴努力. This confirms the system candidate bar a
 text delivery. The keyboard did not expose an inline preview in this trial. The native
 callback and inline rendering are covered by the Windows probe. A device check for
 SetPreviewText, replacement of a selection, and cancellation on blur is still pending.
+
+### Optional callback diagnostics
+
+Build the Counter HAP with `-TraceImePreview` to enable `OpenHarmonyInputDiagnostics.TraceImePreview`.
+This adds an `ime-preview` subdirectory under its usual build and package directories.
+This variant uses the standard Counter bundle identity and editor, and accepts the same rendering switches.
+
+Filter `AvaloniaOHOS` logs to the current Counter process. `IME preview config` reports the advertised flag and
+the SDK setter result. `IME preview set` reports the UTF-16 length, requested range and returned status.
+`IME preview finish` reports the pending preedit length and range when processed by the dispatcher.
+`IME commit` and Counter's `Text length` record accepted text edits. The preview diagnostics never
+report text contents, and sensitive fields skip preview and text length logging.

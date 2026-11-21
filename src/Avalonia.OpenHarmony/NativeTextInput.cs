@@ -204,14 +204,16 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
 
     private void CaptureSelection(Session session)
     {
-        var sendContext = _client is { SupportsSurroundingText: true } client && !IsSensitive(client);
-        var text = sendContext ? _client!.SurroundingText : string.Empty;
-        var range = sendContext ? _client!.Selection : default;
+        var client = _client;
+        var sensitive = client is null || IsSensitive(client);
+        var sendContext = client is { SupportsSurroundingText: true } && !sensitive;
+        var text = sendContext ? client!.SurroundingText : string.Empty;
+        var range = sendContext ? client!.Selection : default;
         var first = Math.Clamp(Math.Min(range.Start, range.End), 0, text.Length);
         var last = Math.Clamp(Math.Max(range.Start, range.End), 0, text.Length);
         var caret = Math.Clamp(range.End, 0, text.Length);
-        var canPreview = sendContext && _client is { SupportsPreedit: true, TextViewVisual: TextPresenter };
-        session.Snapshot = new(text, first, last, caret, GetInputType(), GetEnterKey(), canPreview);
+        var canPreview = sendContext && client is { SupportsPreedit: true, TextViewVisual: TextPresenter };
+        session.Snapshot = new(text, first, last, caret, GetInputType(), GetEnterKey(), canPreview, sensitive);
     }
 
     private bool IsSensitive(TextInputMethodClient client) =>
@@ -433,7 +435,8 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
             client.Selection = new(preview.Start, preview.ReplacedEnd);
         if (!string.IsNullOrEmpty(value))
         {
-            _diagnostics?.Report($"IME commit: {value.Length} UTF-16 units");
+            if (_diagnostics is { } diagnostics && !IsSensitive(client))
+                diagnostics.Report($"IME commit: {value.Length} UTF-16 units");
             _surface.InsertText(value);
         }
         else if (preview is not null && preview.Start != preview.ReplacedEnd)
@@ -452,7 +455,9 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         InputMethodApi.OH_TextConfig_SetInputType(config, state.InputType);
         InputMethodApi.OH_TextConfig_SetEnterKeyType(config, state.EnterKey);
         InputMethodApi.OH_TextConfig_SetSelection(config, state.Start, state.End);
-        InputMethodApi.OH_TextConfig_SetPreviewTextSupport(config, state.SupportsPreview ? (byte)1 : (byte)0);
+        var result = InputMethodApi.OH_TextConfig_SetPreviewTextSupport(config, state.SupportsPreview ? (byte)1 : (byte)0);
+        if (!state.IsSensitive && session.Input._diagnostics is { TraceImePreview: true } diagnostics)
+            diagnostics.Report($"IME preview config: supported={state.SupportsPreview} result={result}");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -471,7 +476,8 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         if (length > 0)
             Queue(editor, (input, client) =>
             {
-                input._diagnostics?.Report($"IME backspace: {length} UTF-16 units");
+                if (input._diagnostics is { } diagnostics && !input.IsSensitive(client))
+                    diagnostics.Report($"IME backspace: {length} UTF-16 units");
                 input.Delete(client, length, backward: true);
             });
     }
@@ -482,7 +488,8 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         if (length > 0)
             Queue(editor, (input, client) =>
             {
-                input._diagnostics?.Report($"IME forward delete: {length} UTF-16 units");
+                if (input._diagnostics is { } diagnostics && !input.IsSensitive(client))
+                    diagnostics.Report($"IME forward delete: {length} UTF-16 units");
                 input.Delete(client, length, backward: false);
             });
     }
@@ -578,9 +585,20 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int SetPreviewText(nint editor, char* text, nuint length, int start, int end)
     {
+        Sessions.TryGetValue(editor, out var session);
+        var state = session?.Snapshot;
+        var result = ProcessPreviewText(session, text, length, start, end);
+        if (state is { IsSensitive: false } && session is not null && !session.Snapshot.IsSensitive &&
+            session.Input._diagnostics is { TraceImePreview: true } diagnostics)
+            diagnostics.Report($"IME preview set: length={length} start={start} end={end} supported={state.SupportsPreview} result={result}");
+        return result;
+    }
+
+    private static int ProcessPreviewText(Session? session, char* text, nuint length, int start, int end)
+    {
         if (length > MaximumTextLength || (text == null && length != 0))
             return InvalidPreviewRange;
-        if (!Sessions.TryGetValue(editor, out var session) || !session.Active)
+        if (session is null || !session.Active)
             return UnsupportedEditorOperation;
         if (!session.Snapshot.SupportsPreview)
             return PreviewNotSupported;
@@ -602,7 +620,15 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void FinishTextPreview(nint editor) =>
-        Queue(editor, static (input, client) => input.Commit(client));
+        Queue(editor, static (input, client) =>
+        {
+            if (input._diagnostics is { TraceImePreview: true } diagnostics && !input.IsSensitive(client))
+            {
+                var preview = input._preview;
+                diagnostics.Report($"IME preview finish: length={preview?.Text.Length ?? 0} start={preview?.Start ?? -1} end={preview?.End ?? -1}");
+            }
+            input.Commit(client);
+        });
 
     private sealed class Session(NativeTextInput input, nint editor, int windowId)
     {
@@ -613,7 +639,7 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         public nint Options { get; set; }
         public volatile bool Active;
         public volatile SelectionSnapshot Snapshot =
-            new(string.Empty, 0, 0, 0, EditorType.Text, EnterKey.Unspecified, false);
+            new(string.Empty, 0, 0, 0, EditorType.Text, EnterKey.Unspecified, false, true);
     }
 
     private sealed record PreviewComposition(TextPresenter Presenter, string Body, int Start, int ReplacedEnd, string Text)
@@ -698,5 +724,5 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
     }
 
     private sealed record SelectionSnapshot(string Text, int Start, int End, int Caret, EditorType InputType, EnterKey EnterKey,
-        bool SupportsPreview);
+        bool SupportsPreview, bool IsSensitive);
 }

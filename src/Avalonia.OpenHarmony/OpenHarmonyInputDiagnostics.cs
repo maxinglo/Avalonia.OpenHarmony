@@ -5,6 +5,9 @@ public sealed class OpenHarmonyInputDiagnostics(Action<string> write)
 {
     private readonly Action<string> _write = write ?? throw new ArgumentNullException(nameof(write));
 
+    /// <summary>Logs preedit callbacks using only numeric metadata and the advertised support flag.</summary>
+    public bool TraceImePreview { get; init; }
+
     internal void Report(string message)
     {
         try { _write(message); }

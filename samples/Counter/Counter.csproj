@@ -10,6 +10,7 @@
     <DefineConstants Condition="'$(OpenHarmonyBuild)' == 'true'">$(DefineConstants);OHOS</DefineConstants>
     <DefineConstants Condition="'$(AvaloniaUseEgl)' == 'true'">$(DefineConstants);OHOS_COUNTER_EGL</DefineConstants>
     <DefineConstants Condition="'$(AvaloniaUseOwnedWindows)' == 'true'">$(DefineConstants);OHOS_COUNTER_WINDOWS</DefineConstants>
+    <DefineConstants Condition="'$(AvaloniaTraceImePreview)' == 'true'">$(DefineConstants);OHOS_COUNTER_IME_PREVIEW</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Avalonia.OpenHarmony/Avalonia.OpenHarmony.csproj"/>

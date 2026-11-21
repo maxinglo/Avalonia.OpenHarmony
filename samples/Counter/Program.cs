@@ -13,7 +13,13 @@ public static partial class Program
     private static AppBuilder ConfigureApp()
     {
         var builder = AppBuilder.Configure<CounterApp>();
-        builder.With(new OpenHarmonyInputDiagnostics(CounterApp.Trace));
+        var diagnostics = new OpenHarmonyInputDiagnostics(CounterApp.Trace)
+        {
+#if OHOS_COUNTER_IME_PREVIEW
+            TraceImePreview = true
+#endif
+        };
+        builder.With(diagnostics);
 #if OHOS_COUNTER_EGL
         builder.With(new OpenHarmonyRenderingOptions { UseEgl = true });
 #endif
