@@ -17,6 +17,9 @@ public static partial class Program
 #if OHOS_COUNTER_EGL
         builder.With(new OpenHarmonyRenderingOptions { UseEgl = true });
 #endif
+#if OHOS_COUNTER_WINDOWS
+        builder.With(new OpenHarmonyWindowOptions());
+#endif
         return builder;
     }
 

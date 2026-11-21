@@ -13,7 +13,7 @@ using Avalonia.VisualTree;
 
 namespace Counter;
 
-public sealed class CounterApp : Application
+public sealed partial class CounterApp : Application
 {
     private const string SampleText = "Avalonia — 中文 🎧";
     private static readonly FilePickerFileType TextFiles = new("Text documents")
@@ -133,6 +133,9 @@ public sealed class CounterApp : Application
                     status
                 }
             };
+#if OHOS_COUNTER_WINDOWS
+            content.Children.Add(ChildWindowButtons());
+#endif
             var border = new Border
             {
                 Child = new ScrollViewer { Content = content },

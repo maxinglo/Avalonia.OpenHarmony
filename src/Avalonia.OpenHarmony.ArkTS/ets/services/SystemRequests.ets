@@ -6,14 +6,19 @@ import { window } from '@kit.ArkUI';
 import bridge from 'libavalonia_ohos_bridge.so';
 import { executeStorageRequest, supportsFolderPicker } from './StorageRequests';
 import { WindowInsetsRequests } from '../entryability/WindowInsets';
+import { ChildWindows } from '../entryability/ChildWindows';
 
-export function registerSystemRequests(context: common.UIAbilityContext, mainWindow?: window.Window): () => void {
+export function registerSystemRequests(context: common.UIAbilityContext, mainWindow?: window.Window,
+  stage?: window.WindowStage): () => void {
   const windowInsets = mainWindow === undefined ? undefined : new WindowInsetsRequests(mainWindow);
+  const children = mainWindow === undefined || stage === undefined ? undefined : new ChildWindows(stage, mainWindow);
   bridge.registerSystemRequests((id: bigint, operation: string, argument: string): void => {
     const finish = (value: string | null, fd?: number): void => bridge.completeSystemRequest(id, value, fd);
     let request: Promise<void>;
     if (operation.startsWith('storage.')) {
       request = executeStorageRequest(context, operation, argument, finish);
+    } else if (operation === 'window.child' && children !== undefined) {
+      request = children.execute(argument).then((value: string | null): void => finish(value));
     } else if (operation.startsWith('window.') && windowInsets !== undefined) {
       request = windowInsets.execute(operation, argument).then((value: string | null): void => finish(value));
     } else {
@@ -25,6 +30,7 @@ export function registerSystemRequests(context: common.UIAbilityContext, mainWin
     });
   }, supportsFolderPicker());
   return (): void => {
+    children?.stop();
     windowInsets?.stop();
     bridge.unregisterSystemRequests();
   };

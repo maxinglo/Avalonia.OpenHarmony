@@ -128,6 +128,11 @@ unknown when HarmonyOS reports zero reserved area. Visibility and color commands
 and window modes. Layout follows the actual XComponent
 geometry. [HarmonyOS window system bars](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
 
+### Owned windows
+
+Use the optional windowed stage to show native Avalonia child windows and modal dialogs.
+[Owned window integration](docs/owned-windows.md)
+
 ## Compatibility
 
 The backend uses the available Avalonia 12.1.6 implementation assemblies and exact package versions. Its scope is a
