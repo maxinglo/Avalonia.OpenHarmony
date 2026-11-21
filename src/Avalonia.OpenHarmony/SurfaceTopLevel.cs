@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Input.Raw;
 using Avalonia.Input.TextInput;
 using Avalonia.Platform;
@@ -131,6 +132,8 @@ internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatfo
     public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant) { }
     public object? TryGetFeature(Type featureType)
     {
+        if (featureType == typeof(IClipboard))
+            return OpenHarmonyClipboard.Instance;
         if (featureType == typeof(ITextInputMethodImpl))
             return _textInput;
         if (featureType == typeof(ILauncher))

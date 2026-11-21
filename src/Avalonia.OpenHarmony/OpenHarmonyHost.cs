@@ -61,6 +61,13 @@ public sealed class OpenHarmonyHost
 
     public Task Ready => _ready.Task;
 
+    /// <summary>Pastes into the focused Avalonia text box after a successful ArkUI PasteButton authorization.</summary>
+    public void PasteToFocusedTextBox() => Post(() =>
+    {
+        if (_root?.FocusManager?.GetFocusedElement() is TextBox { IsReadOnly: false } textBox)
+            textBox.Paste();
+    });
+
     public void UpdateSurface(long surface, int width, int height, double scaling) =>
         Post(() =>
         {
