@@ -12,7 +12,7 @@ using Avalonia.Rendering.Composition;
 
 namespace Avalonia.OpenHarmony;
 
-internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatformSurface
+internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatformSurface
 {
     private const long MaximumPixels = 16_777_216;
     private readonly OpenHarmonyHost.PresentFrame _present;
@@ -21,6 +21,7 @@ internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatfo
     private readonly NativeTextInput? _textInput;
     private readonly ILauncher? _launcher;
     private readonly IStorageProvider? _storageProvider;
+    private readonly OpenHarmonyCursorController? _cursorController;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private IInputRoot? _inputRoot;
     private PixelSize _pixelSize;
@@ -35,7 +36,10 @@ internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatfo
         _launcher = launcher;
         _storageProvider = storageProvider;
         if (getInputWindowId is not null)
+        {
             _textInput = new(this, getInputWindowId, reportError);
+            _cursorController = new(getInputWindowId);
+        }
         Surfaces = [this];
     }
 
@@ -126,7 +130,8 @@ internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatfo
     }
     public Point PointToClient(PixelPoint point) => point.ToPoint(RenderScaling);
     public PixelPoint PointToScreen(Point point) => PixelPoint.FromPoint(point, RenderScaling);
-    public void SetCursor(ICursorImpl? cursor) { }
+    public void SetCursor(ICursorImpl? cursor) =>
+        _cursorController?.Apply((cursor as OpenHarmonyCursor)?.Kind ?? StandardCursorType.Arrow);
     public IPopupImpl? CreatePopup() => null;
     public void SetTransparencyLevelHint(IReadOnlyList<WindowTransparencyLevel> levels) { }
     public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant) { }
@@ -149,6 +154,7 @@ internal sealed unsafe class SurfaceTopLevel : ITopLevelImpl, IFramebufferPlatfo
         NativeMemory.Free((void*)_pixels);
         _pixels = IntPtr.Zero;
         _touch.Dispose();
+        _mouse.Dispose();
         Closed?.Invoke();
     }
 }

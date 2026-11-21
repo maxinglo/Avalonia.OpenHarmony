@@ -36,6 +36,25 @@ public static partial class Program
             Host.Value.Touch(surface, contact, (TouchPhase)phase, x, y);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_pointer")]
+    public static void Pointer(long surface, int phase, int button, double x, double y, double wheelX, double wheelY,
+        int modifiers)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.HardwarePointer(surface, phase, button, x, y, wheelX, wheelY, modifiers);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_key")]
+    public static int Key(long surface, int down, int code, int modifiers, int unicode, int locks) =>
+        Host.IsValueCreated && Host.Value.HardwareKey(surface, down != 0, code, modifiers, unicode, locks) ? 1 : 0;
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_input_blur")]
+    public static void InputBlur(long surface)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.HardwareInputBlur(surface);
+    }
+
     [LibraryImport("libavalonia_ohos_bridge.so", EntryPoint = "avaoh_present")]
     private static partial void Present(long surface, IntPtr pixels, int width, int height, int rowBytes);
 

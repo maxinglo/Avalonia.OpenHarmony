@@ -130,6 +130,42 @@ public sealed class OpenHarmonyHost
                 _topLevel.Touch(contact, phase, x, y);
         });
 
+    /// <summary>Queues hardware pointer input. Position is in physical pixels and wheel deltas are in Avalonia wheel units.</summary>
+    public void HardwarePointer(long surface, int phase, int button, double x, double y,
+        double wheelX, double wheelY, int modifiers) =>
+        Post(() =>
+        {
+            if (_topLevel?.Surface == surface)
+                _topLevel.HardwarePointer(phase, button, x, y, wheelX, wheelY, (RawInputModifiers)modifiers);
+        });
+
+    /// <summary>Queues an ArkUI hardware key and reports whether its key code or printable text is supported.</summary>
+    public bool HardwareKey(long surface, bool down, int keyCode, int modifiers, int unicode, int locks)
+    {
+        var key = OpenHarmonyKeyInterop.Map(keyCode, (locks & 1) != 0);
+        var keyModifiers = (RawInputModifiers)modifiers & RawInputModifiers.KeyboardMask;
+        var text = OpenHarmonyKeyInterop.Text(key, unicode, keyModifiers);
+        if (key == default && text == null)
+            return false;
+
+        Post(() =>
+        {
+            if (_topLevel?.Surface == surface)
+                _topLevel.HardwareKey(down, key, keyModifiers, text);
+        });
+        return true;
+    }
+
+    public void HardwareInputBlur(long surface) =>
+        Post(() =>
+        {
+            if (_topLevel?.Surface == surface)
+            {
+                _topLevel.CancelHardwarePointer();
+                _root?.FocusManager.Focus(null);
+            }
+        });
+
     private void Run(Func<AppBuilder> configure)
     {
         try
@@ -230,12 +266,8 @@ public sealed class OpenHarmonyHost
 
     private sealed class CursorFactory : ICursorFactory
     {
-        public ICursorImpl GetCursor(Avalonia.Input.StandardCursorType cursorType) => new Cursor();
-        public ICursorImpl CreateCursor(Bitmap cursor, PixelPoint hotSpot) => new Cursor();
-        private sealed class Cursor : ICursorImpl
-        {
-            public void Dispose() { }
-        }
+        public ICursorImpl GetCursor(StandardCursorType cursorType) => new OpenHarmonyCursor(cursorType);
+        public ICursorImpl CreateCursor(Bitmap cursor, PixelPoint hotSpot) => new OpenHarmonyCursor(StandardCursorType.Arrow);
     }
 }
 

@@ -31,6 +31,9 @@ struct AppLibrary {
         resize = reinterpret_cast<decltype(resize)>(dlsym(handle, "avaoh_resize"));
         destroy = reinterpret_cast<decltype(destroy)>(dlsym(handle, "avaoh_destroy"));
         touch = reinterpret_cast<decltype(touch)>(dlsym(handle, "avaoh_touch"));
+        pointer = reinterpret_cast<decltype(pointer)>(dlsym(handle, "avaoh_pointer"));
+        key = reinterpret_cast<decltype(key)>(dlsym(handle, "avaoh_key"));
+        inputBlur = reinterpret_cast<decltype(inputBlur)>(dlsym(handle, "avaoh_input_blur"));
     }
 
     // Keep the NativeAOT library loaded for the process lifetime.
@@ -38,6 +41,9 @@ struct AppLibrary {
     void (*resize)(int64_t, int32_t, int32_t, double) = nullptr;
     void (*destroy)(int64_t) = nullptr;
     void (*touch)(int64_t, int64_t, int32_t, double, double) = nullptr;
+    void (*pointer)(int64_t, int32_t, int32_t, double, double, double, double, int32_t) = nullptr;
+    int32_t (*key)(int64_t, int32_t, int32_t, int32_t, int32_t, int32_t) = nullptr;
+    void (*inputBlur)(int64_t) = nullptr;
 
     bool ready() const { return resize != nullptr && destroy != nullptr && touch != nullptr; }
 };
@@ -78,6 +84,12 @@ bool ParseSurfaceId(napi_env env, napi_value value, uint64_t& surfaceId)
         return false;
     const auto parsed = std::from_chars(text, text + length, surfaceId);
     return parsed.ec == std::errc{} && parsed.ptr == text + length && surfaceId != 0;
+}
+
+int64_t SurfaceToken(uint64_t surfaceId)
+{
+    std::lock_guard lock(surfaceMutex);
+    return surface.id == surfaceId ? surface.token : 0;
 }
 
 napi_value Error(napi_env env, const char* message)
@@ -222,14 +234,73 @@ napi_value Touch(napi_env env, napi_callback_info info)
         napi_get_value_double(env, args[3], &x) != napi_ok || !std::isfinite(x) ||
         napi_get_value_double(env, args[4], &y) != napi_ok || !std::isfinite(y))
         return Error(env, "Invalid XComponent touch event.");
-    int64_t token = 0;
-    {
-        std::lock_guard lock(surfaceMutex);
-        if (surface.id == surfaceId)
-            token = surface.token;
-    }
+    const auto token = SurfaceToken(surfaceId);
     if (token != 0 && App().ready())
         App().touch(token, contact, phase, x, y);
+    return nullptr;
+}
+
+napi_value Pointer(napi_env env, napi_callback_info info)
+{
+    size_t count = 8;
+    napi_value args[8];
+    uint64_t surfaceId;
+    int32_t phase, button, modifiers;
+    double x, y, wheelX, wheelY;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 8 ||
+        !ParseSurfaceId(env, args[0], surfaceId) ||
+        napi_get_value_int32(env, args[1], &phase) != napi_ok || phase < 0 || phase > 4 ||
+        napi_get_value_int32(env, args[2], &button) != napi_ok || button < 0 || button > 5 ||
+        napi_get_value_double(env, args[3], &x) != napi_ok || !std::isfinite(x) ||
+        napi_get_value_double(env, args[4], &y) != napi_ok || !std::isfinite(y) ||
+        napi_get_value_double(env, args[5], &wheelX) != napi_ok || !std::isfinite(wheelX) ||
+        napi_get_value_double(env, args[6], &wheelY) != napi_ok || !std::isfinite(wheelY) ||
+        napi_get_value_int32(env, args[7], &modifiers) != napi_ok)
+        return Error(env, "Invalid XComponent hardware pointer event.");
+
+    const auto token = SurfaceToken(surfaceId);
+    if (token != 0 && App().pointer != nullptr)
+        App().pointer(token, phase, button, x, y, wheelX, wheelY, modifiers);
+    return nullptr;
+}
+
+napi_value Key(napi_env env, napi_callback_info info)
+{
+    size_t count = 6;
+    napi_value args[6];
+    uint64_t surfaceId;
+    bool down;
+    int32_t code, modifiers, unicode, locks;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 6 ||
+        !ParseSurfaceId(env, args[0], surfaceId) ||
+        napi_get_value_bool(env, args[1], &down) != napi_ok ||
+        napi_get_value_int32(env, args[2], &code) != napi_ok ||
+        napi_get_value_int32(env, args[3], &modifiers) != napi_ok ||
+        napi_get_value_int32(env, args[4], &unicode) != napi_ok ||
+        napi_get_value_int32(env, args[5], &locks) != napi_ok)
+        return Error(env, "Invalid XComponent hardware key event.");
+
+    const auto token = SurfaceToken(surfaceId);
+    const bool accepted = token != 0 && App().key != nullptr &&
+        App().key(token, down ? 1 : 0, code, modifiers, unicode, locks) != 0;
+    napi_value result = nullptr;
+    if (napi_get_boolean(env, accepted, &result) != napi_ok)
+        return Error(env, "Could not return the XComponent hardware key result.");
+    return result;
+}
+
+napi_value InputBlur(napi_env env, napi_callback_info info)
+{
+    size_t count = 1;
+    napi_value argument;
+    uint64_t surfaceId;
+    if (napi_get_cb_info(env, info, &count, &argument, nullptr, nullptr) != napi_ok ||
+        count != 1 || !ParseSurfaceId(env, argument, surfaceId))
+        return Error(env, "Invalid XComponent surface ID.");
+
+    const auto token = SurfaceToken(surfaceId);
+    if (token != 0 && App().inputBlur != nullptr)
+        App().inputBlur(token);
     return nullptr;
 }
 
@@ -276,7 +347,10 @@ napi_value Init(napi_env env, napi_value exports)
             napi_default, nullptr},
         {"updateSurface", nullptr, UpdateSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"closeSurface", nullptr, CloseSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"touch", nullptr, Touch, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"touch", nullptr, Touch, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pointer", nullptr, Pointer, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"key", nullptr, Key, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"inputBlur", nullptr, InputBlur, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     if (napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties) != napi_ok)
         return Error(env, "Could not export the Avalonia OpenHarmony bridge.");
