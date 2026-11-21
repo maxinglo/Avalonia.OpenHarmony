@@ -15,7 +15,8 @@ disables its owner's input while the dialog is open.
 ## HAP integration
 
 - Call `registerSystemRequests(context, mainWindow, windowStage)` and dispose the returned
-  registration on stage destruction.
+  registration in `onWindowStageWillDestroy`. Call `reportStageDestroyed()` from the shared
+  `ChildWindows.ets` module in the subsequent `onWindowStageDestroy` callback.
 - Pass `true` as the optional fourth argument to publish child window accessibility while
   a HarmonyOS accessibility service is active. Each surface has its own registration.
 - Include `pages/AvaloniaChildWindow` in the module's `main_pages.json`. The reusable ArkTS
@@ -44,5 +45,32 @@ incremented the child counter. The same interaction on the owner had no effect w
 dialog was open. Closing the child returned 1 to its caller and restored the owner input.
 A modeless owned window also presented a separate frame. It moved to physical position
 1036,529, resized from about 420 to 500 DIP wide, closed, and left the owner interactive.
+
+In the integrated Counter, the child TextBox attached the HarmonyOS input method to the
+child window ID reported by WindowManager. The keyboard opened while that window held focus.
+Insets observation currently follows the stage window. In the accessibility-enabled
+HAP, both open surfaces registered successfully under ScreenReader. Activating the
+main button through ScreenReader incremented its counter. Child activation still
+needs a separate device check.
+
+## Window closure
+
+A child stops accepting input as soon as its managed window requests closure. The
+backend keeps its native handle and surface routing until HarmonyOS confirms destruction.
+If destruction fails, it can release native modality, hide the window and retry.
+A typed dialog result completes after destruction is confirmed. If the system confirms
+the child is hidden or no longer modal, the owner can accept input while cleanup
+continues. The Stage itself belongs to UIAbility. Closing its managed Window prevents
+that same stage from reopening during a surface resize. A new WindowStage starts a
+new managed owner.
+
+The closure regression probes cover failed show cleanup, repeated destroy rejection,
+retry, fallback hide and modality, and destruction during a stage change. Run the
+ArkTS service probe with the TypeScript compiler supplied by the DevEco API 26 SDK.
+
+```powershell
+$typescript = Join-Path $DevEcoRoot 'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'
+node tests/WindowCloseProbe/CloseProbe.cjs $typescript
+```
 
 [HarmonyOS WindowStage API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-windowstage/)
