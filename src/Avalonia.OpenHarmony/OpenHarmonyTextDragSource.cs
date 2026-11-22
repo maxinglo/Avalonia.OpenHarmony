@@ -33,6 +33,8 @@ internal sealed class OpenHarmonyTextDragSource(
             if ((allowedEffects & DragDropEffects.Copy) == 0 ||
                 triggerEvent.Pointer.Type != PointerType.Touch ||
                 triggerEvent.PlatformInputEventCookie is not OpenHarmonyTextDragGesture gesture ||
+                transfer.Formats.Contains(DataFormat.File) ||
+                transfer.Items.Any(item => item.Formats.Contains(DataFormat.File)) ||
                 transfer.TryGetText() is not { } text ||
                 Encoding.UTF8.GetByteCount(text) > MaximumTextBytes)
                 return DragDropEffects.None;

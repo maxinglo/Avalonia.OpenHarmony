@@ -26,4 +26,5 @@ logs with `OpenHarmonyInputDiagnostics`.
 | Owned windows and modal dialogs | The opt-in x86_64 native Counter presented a separate Avalonia dialog frame, rejected owner touch while modal, accepted child touch, returned 1 from ShowDialog, and restored owner input after close. The modeless window moved, resized from about 420 to 500 DIP wide, and closed. In the integrated HAP, IME attachment and WindowManager focus both identified the child window. The final close-fix HAP repeated both normal open and close flows. Rejected native closure and retries were verified with fault injection. | Run the `-Windowed` sample and test **Open modal dialog** and **Open owned window**. [Owned window integration](owned-windows.md) |
 
 The default embedded host and AudioSynx use one application view with Avalonia menus and dropdowns. A separate EGL
-rotation check, independent native windows and outbound file drags require further platform verification.
+rotation check and independent native windows require further platform verification. The outbound system source
+accepts plain text and rejects file offers. [Outbound file scope](text-drag-source.md#outbound-file-scope)
