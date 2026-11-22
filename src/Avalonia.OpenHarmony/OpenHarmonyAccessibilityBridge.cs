@@ -20,6 +20,7 @@ internal static unsafe partial class OpenHarmonyAccessibilityBridge
                 node.Top = source.Bounds.Y;
                 node.Right = source.Bounds.Right;
                 node.Bottom = source.Bounds.Bottom;
+                node.ScrollOffset = source.ScrollOffset;
                 node.Role = Marshal.StringToCoTaskMemUTF8(source.Role);
                 node.Name = Marshal.StringToCoTaskMemUTF8(source.Name);
             }
@@ -49,6 +50,7 @@ internal static unsafe partial class OpenHarmonyAccessibilityBridge
         public int Top;
         public int Right;
         public int Bottom;
+        public int ScrollOffset;
         public nint Role;
         public nint Name;
     }

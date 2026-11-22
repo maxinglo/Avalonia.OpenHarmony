@@ -20,6 +20,8 @@ constexpr int32_t RootParent = -2100000;
 constexpr int32_t MaximumNodes = 4096;
 constexpr size_t MaximumNameBytes = 32768;
 constexpr uint32_t Enabled = 1, Focusable = 2, InputFocused = 4, Invokable = 8;
+constexpr uint32_t Scrollable = 16, CanScrollForward = 32, CanScrollBackward = 64;
+constexpr int32_t ManagedScrollForward = 1, ManagedScrollBackward = 2;
 constexpr auto Ok = ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
 constexpr auto Missing = ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
 constexpr auto Invalid = ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
@@ -27,21 +29,25 @@ constexpr auto NoMemory = ARKUI_ACCESSIBILITY_NATIVE_RESULT_OUT_OF_MEMORY;
 constexpr auto Click = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_CLICK;
 constexpr auto GainFocus = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_GAIN_ACCESSIBILITY_FOCUS;
 constexpr auto ClearFocus = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_CLEAR_ACCESSIBILITY_FOCUS;
+constexpr auto ScrollForward = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_SCROLL_FORWARD;
+constexpr auto ScrollBackward = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_SCROLL_BACKWARD;
 
 struct NativeNode {
     int32_t id, parent;
     uint32_t state;
-    int32_t left, top, right, bottom;
+    int32_t left, top, right, bottom, scrollOffset;
     const char* role;
     const char* name;
 };
-static_assert(sizeof(NativeNode) == 48 && offsetof(NativeNode, role) == 32,
+// The optional scroll offset uses the existing padding before the string pointers.
+static_assert(sizeof(NativeNode) == 48 && offsetof(NativeNode, scrollOffset) == 28 && offsetof(NativeNode, role) == 32,
     "Accessibility ABI must match the C# blittable node.");
 
 struct Node {
     int32_t id, parent;
     uint32_t state;
     ArkUI_AccessibleRect bounds;
+    int32_t scrollOffset;
     std::string role, name;
     std::vector<int64_t> children;
 };
@@ -59,6 +65,7 @@ struct Registration {
     ArkUI_NodeHandle overlay;
     accessibility::Configure configure;
     accessibility::Invoke invoke;
+    accessibility::Action action;
     std::shared_ptr<const Tree> tree;
     int32_t focus = 0;
 };
@@ -86,6 +93,7 @@ Registration* FindRegistration(const char* instance)
 struct Query {
     std::shared_ptr<const Tree> tree;
     int32_t focus = 0;
+    bool canScroll = false;
 };
 
 Query Read(const char* instance)
@@ -94,7 +102,7 @@ Query Read(const char* instance)
     const auto* registration = FindRegistration(instance);
     if (registration == nullptr)
         return {};
-    return {registration->tree, registration->focus};
+    return {registration->tree, registration->focus, registration->action != nullptr};
 }
 
 const Node* Find(const Tree& tree, int64_t id)
@@ -107,7 +115,16 @@ const Node* Find(const Tree& tree, int64_t id)
 }
 
 bool Actionable(const Node& node) { return (node.state & (Enabled | Invokable)) == (Enabled | Invokable); }
-bool Navigable(const Node& node) { return node.id != Root && (!node.name.empty() || (node.state & Focusable) != 0); }
+bool SupportsScroll(const Node& node, bool canScroll)
+{
+    return canScroll && (node.state & (Enabled | Scrollable)) == (Enabled | Scrollable) &&
+        (node.state & (CanScrollForward | CanScrollBackward)) != 0;
+}
+
+bool Navigable(const Node& node, bool canScroll)
+{
+    return node.id != Root && (!node.name.empty() || (node.state & Focusable) != 0 || SupportsScroll(node, canScroll));
+}
 
 int32_t Fill(const Query& query, const Node& node, ArkUI_AccessibilityElementInfo* info)
 {
@@ -121,18 +138,29 @@ int32_t Fill(const Query& query, const Node& node, ArkUI_AccessibilityElementInf
     OH_ArkUI_AccessibilityElementInfoSetScreenRect(info, &bounds);
     OH_ArkUI_AccessibilityElementInfoSetVisible(info, true);
     OH_ArkUI_AccessibilityElementInfoSetEnabled(info, (node.state & Enabled) != 0);
-    OH_ArkUI_AccessibilityElementInfoSetFocusable(info, Navigable(node));
+    const auto scrollable = SupportsScroll(node, query.canScroll);
+    OH_ArkUI_AccessibilityElementInfoSetScrollable(info, scrollable);
+    const auto navigable = Navigable(node, query.canScroll);
+    OH_ArkUI_AccessibilityElementInfoSetFocusable(info, navigable);
     OH_ArkUI_AccessibilityElementInfoSetFocused(info, (node.state & InputFocused) != 0);
     OH_ArkUI_AccessibilityElementInfoSetAccessibilityFocused(info, node.id == query.focus);
-    OH_ArkUI_AccessibilityElementInfoSetAccessibilityLevel(info, Navigable(node) ? "yes" : "no");
+    OH_ArkUI_AccessibilityElementInfoSetAccessibilityLevel(info, navigable ? "yes" : "no");
     if (!node.children.empty()) {
         auto ids = node.children;
         OH_ArkUI_AccessibilityElementInfoSetChildNodeIds(info, static_cast<int32_t>(ids.size()), ids.data());
     }
-    ArkUI_AccessibleAction actions[]{{GainFocus, ""}, {ClearFocus, ""}, {Click, ""}};
-    if (Navigable(node)) {
-        OH_ArkUI_AccessibilityElementInfoSetClickable(info, Actionable(node));
-        OH_ArkUI_AccessibilityElementInfoSetOperationActions(info, Actionable(node) ? 3 : 2, actions);
+    if (navigable) {
+        ArkUI_AccessibleAction actions[5]{{GainFocus, ""}, {ClearFocus, ""}};
+        int32_t count = 2;
+        const auto clickable = Actionable(node);
+        if (clickable) actions[count++] = {Click, ""};
+        OH_ArkUI_AccessibilityElementInfoSetClickable(info, clickable);
+        if (scrollable) {
+            OH_ArkUI_AccessibilityElementInfoSetAccessibilityOffset(info, node.scrollOffset);
+            if (node.state & CanScrollForward) actions[count++] = {ScrollForward, ""};
+            if (node.state & CanScrollBackward) actions[count++] = {ScrollBackward, ""};
+        }
+        OH_ArkUI_AccessibilityElementInfoSetOperationActions(info, count, actions);
     }
     return Ok;
 }
@@ -217,12 +245,14 @@ int32_t NextFocus(const char* instance, int64_t id, ArkUI_AccessibilityFocusMove
     if (direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_FORWARD) {
         auto next = std::find(tree.order.begin(), tree.order.end(), node->id) + 1;
         for (; next != tree.order.end(); ++next)
-            if (const auto& candidate = tree.nodes.at(*next); Navigable(candidate)) return Fill(query, candidate, info);
+            if (const auto& candidate = tree.nodes.at(*next); Navigable(candidate, query.canScroll))
+                return Fill(query, candidate, info);
     } else if (direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_BACKWARD) {
         auto next = node->id == Root ? tree.order.rbegin() :
             std::find(tree.order.rbegin(), tree.order.rend(), node->id) + 1;
         for (; next != tree.order.rend(); ++next)
-            if (const auto& candidate = tree.nodes.at(*next); Navigable(candidate)) return Fill(query, candidate, info);
+            if (const auto& candidate = tree.nodes.at(*next); Navigable(candidate, query.canScroll))
+                return Fill(query, candidate, info);
     }
     return Missing;
 }
@@ -234,16 +264,28 @@ int32_t Execute(const char* instance, int64_t id, ArkUI_Accessibility_ActionType
     auto* registration = FindRegistration(instance);
     if (!registration || !registration->tree) return Missing;
     const auto* node = Find(*registration->tree, id);
-    if (!node || !Navigable(*node)) return Missing;
+    if (!node || !Navigable(*node, registration->action != nullptr)) return Missing;
     if (action == GainFocus || action == ClearFocus) {
         if (action == GainFocus) registration->focus = node->id;
         else if (registration->focus == node->id) registration->focus = 0;
         return Ok;
     }
-    if (action != Click || !Actionable(*node)) return Missing;
     // This callback queues work on the Avalonia dispatcher and does not call back into this bridge.
-    registration->invoke(registration->surface, registration->generation, node->id);
-    return Ok;
+    if (action == Click && Actionable(*node)) {
+        registration->invoke(registration->surface, registration->generation, node->id);
+        return Ok;
+    }
+    if (SupportsScroll(*node, registration->action != nullptr)) {
+        if (action == ScrollForward && (node->state & CanScrollForward)) {
+            registration->action(registration->surface, registration->generation, node->id, ManagedScrollForward);
+            return Ok;
+        }
+        if (action == ScrollBackward && (node->state & CanScrollBackward)) {
+            registration->action(registration->surface, registration->generation, node->id, ManagedScrollBackward);
+            return Ok;
+        }
+    }
+    return Missing;
 }
 
 int32_t ClearFocused(const char* instance)
@@ -275,7 +317,8 @@ bool ConfigureOverlay(ArkUI_NativeNodeAPI_1* api, ArkUI_NodeHandle node)
 }
 }
 
-int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surface, Configure configure, Invoke invoke)
+int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surface, Configure configure, Invoke invoke,
+    Action action)
 {
     if (!configure || !invoke)
         return Invalid;
@@ -300,7 +343,8 @@ int32_t accessibility::Attach(napi_env env, napi_value nodeContent, int64_t surf
         return Missing;
     }
     auto registration = std::make_unique<Registration>(Registration{
-        surface, generation, "avalonia-" + std::to_string(generation), api, content, node, configure, invoke, nullptr});
+        surface, generation, "avalonia-" + std::to_string(generation), api, content, node, configure, invoke, action,
+        nullptr});
     ArkUI_AccessibilityProvider* provider = nullptr;
     auto result = OH_ArkUI_NativeModule_GetNativeAccessibilityProvider(&node, &provider);
     if (result == Ok)
@@ -368,8 +412,9 @@ extern "C" void avaoh_submit_accessibility(int64_t surface, int64_t generation, 
                 if (parent == tree->nodes.end()) return;
                 parent->second.children.push_back(source.id);
             }
+            const auto offset = (source.state & Scrollable) != 0 ? std::max(0, source.scrollOffset) : 0;
             const auto inserted = tree->nodes.emplace(source.id, Node{source.id, source.parent, source.state,
-                {source.left, source.top, source.right, source.bottom}, source.role, source.name, {}});
+                {source.left, source.top, source.right, source.bottom}, offset, source.role, source.name, {}});
             if (!inserted.second) return;
             tree->order.push_back(source.id);
         }

@@ -144,10 +144,18 @@ dispatched back to Avalonia, where the host checks the active surface registrati
 
 Set `enableAccessibility: true` on `AvaloniaSurfaceHost` and enable a HarmonyOS accessibility service.
 Application libraries opt in by exporting `avaoh_accessibility_configure` and `avaoh_accessibility_invoke`, as Counter
-does.
+does. Export `avaoh_accessibility_action` to enable scroll callbacks. Forward its `surface`, `registration`, `id`,
+and `OpenHarmonyAccessibilityAction` to `OpenHarmonyHost.InvokeAccessibility`. The two original exports continue
+to provide button Invoke.
+
+A visible, enabled `ScrollViewer` with a physical viewport advertises the available forward and backward page
+actions and publishes its position in physical pixels. Forward uses the vertical axis when it has overflow and
+uses the horizontal axis otherwise. A viewport based on logical item units has no pixel offset to publish through
+this interface.
 The bridge clears the snapshot when accessibility is disabled or the surface is replaced. System ScreenReader focused
-and invoked the Counter's main button on the API 26 emulator. Scroll, text editing and value changes through
-accessibility actions still need platform support.
+and invoked the Counter's main button on the API 26 emulator. The Windows probe exercised scroll actions on
+actual ScrollViewers. System ScreenReader scrolling still needs device validation. Text editing and value
+actions still need a platform bridge.
 [HarmonyOS XComponent accessibility guide](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/ndk-accessibility-xcomponent/)
 
 On the API 26 x86_64 emulator, a standalone CustomNode probe registered its native provider and answered a system

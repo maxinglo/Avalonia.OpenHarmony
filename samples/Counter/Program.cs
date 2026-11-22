@@ -104,6 +104,13 @@ public static partial class Program
             Host.Value.InvokeAccessibility(surface, registration, id);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_accessibility_action")]
+    public static void AccessibilityAction(long surface, long registration, int id, OpenHarmonyAccessibilityAction action)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.InvokeAccessibility(surface, registration, id, action);
+    }
+
     [LibraryImport("libavalonia_ohos_bridge.so", EntryPoint = "avaoh_present")]
     private static partial void Present(long surface, IntPtr pixels, int width, int height, int rowBytes);
 

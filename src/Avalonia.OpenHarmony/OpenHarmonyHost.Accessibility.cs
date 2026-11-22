@@ -30,11 +30,15 @@ public sealed partial class OpenHarmonyHost
     });
 
     /// <summary>Invokes an enabled semantic node on the Avalonia UI dispatcher.</summary>
-    public void InvokeAccessibility(long surface, long registration, int id) => Post(() =>
+    public void InvokeAccessibility(long surface, long registration, int id) =>
+        InvokeAccessibility(surface, registration, id, OpenHarmonyAccessibilityAction.Invoke);
+
+    /// <summary>Performs a supported action on an enabled semantic node on the Avalonia UI dispatcher.</summary>
+    public void InvokeAccessibility(long surface, long registration, int id, OpenHarmonyAccessibilityAction action) => Post(() =>
     {
         if (FindInputSurface(surface) is not null && _accessibility.TryGetValue(surface, out var state) &&
             state.Generation == registration)
-            state.Tree?.Invoke(id);
+            state.Tree?.Invoke(id, action);
     });
 
     private void CloseAccessibility(long surface)

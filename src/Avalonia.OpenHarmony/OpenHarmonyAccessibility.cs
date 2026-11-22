@@ -4,6 +4,8 @@ using Avalonia.Automation;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Threading;
 
@@ -15,12 +17,27 @@ public enum OpenHarmonyAccessibilityState : uint
     Enabled = 1,
     Focusable = 2,
     InputFocused = 4,
-    Invokable = 8
+    Invokable = 8,
+    Scrollable = 16,
+    ScrollForward = 32,
+    ScrollBackward = 64
+}
+
+/// <summary>An action requested by the accessibility service.</summary>
+public enum OpenHarmonyAccessibilityAction
+{
+    Invoke = 0,
+    ScrollForward = 1,
+    ScrollBackward = 2
 }
 
 /// <summary>One accessible element with bounds relative to the surface, in physical pixels.</summary>
 public readonly record struct OpenHarmonyAccessibilityNode(int Id, int ParentId, string Role, string Name,
-    PixelRect Bounds, OpenHarmonyAccessibilityState State);
+    PixelRect Bounds, OpenHarmonyAccessibilityState State)
+{
+    /// <summary>The offset along the primary scroll axis, in physical pixels.</summary>
+    public int ScrollOffset { get; init; }
+}
 
 /// <summary>The current semantics of an enabled OpenHarmony surface.</summary>
 public readonly record struct OpenHarmonyAccessibilitySnapshot(long Surface, long Registration,
@@ -35,7 +52,7 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
     private readonly Action<OpenHarmonyAccessibilitySnapshot> _publish;
     private readonly Action<string> _reportError;
     private readonly ConditionalWeakTable<AutomationPeer, NodeId> _identities = new();
-    private Dictionary<int, AutomationPeer> _invokable = new();
+    private Dictionary<int, AutomationPeer> _actionable = new();
     private HashSet<AutomationPeer> _observed = new(ReferenceEqualityComparer.Instance);
     private OpenHarmonyAccessibilityNode[] _latest = [];
     private int _nextId = 1;
@@ -56,16 +73,35 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
 
     public long Registration { get; }
 
-    public void Invoke(int id)
+    public void Invoke(int id, OpenHarmonyAccessibilityAction action)
     {
         if (_disposed)
             return;
         Refresh();
-        if (_invokable.TryGetValue(id, out var peer) && peer.IsEnabled() && !peer.IsOffscreen())
+        if (!_actionable.TryGetValue(id, out var peer) || !peer.IsEnabled() || peer.IsOffscreen())
+            return;
+
+        if (action == OpenHarmonyAccessibilityAction.Invoke)
         {
             peer.GetProvider<IInvokeProvider>()?.Invoke();
-            Invalidate(null, EventArgs.Empty);
         }
+        else
+        {
+            OpenHarmonyAccessibilityState direction = action switch
+            {
+                OpenHarmonyAccessibilityAction.ScrollForward => OpenHarmonyAccessibilityState.ScrollForward,
+                OpenHarmonyAccessibilityAction.ScrollBackward => OpenHarmonyAccessibilityState.ScrollBackward,
+                _ => 0
+            };
+            if (direction == 0 || GetScrollPosition(peer) is not { } position ||
+                (position.Directions & direction) == 0)
+                return;
+            var amount = action == OpenHarmonyAccessibilityAction.ScrollForward
+                ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement;
+            position.Peer.Scroll(position.Vertical ? ScrollAmount.NoAmount : amount,
+                position.Vertical ? amount : ScrollAmount.NoAmount);
+        }
+        Invalidate(null, EventArgs.Empty);
     }
 
     private void Invalidate(object? sender, EventArgs args)
@@ -89,11 +125,11 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
                 return;
 
             var nodes = new List<OpenHarmonyAccessibilityNode>();
-            var invokable = new Dictionary<int, AutomationPeer>();
+            var actionable = new Dictionary<int, AutomationPeer>();
             var visited = new HashSet<AutomationPeer>(ReferenceEqualityComparer.Instance);
             var clip = new Rect(_root.ClientSize);
-            Add(root, 0, 0, clip, nodes, invokable, visited);
-            _invokable = invokable;
+            Add(root, 0, 0, clip, nodes, actionable, visited);
+            _actionable = actionable;
             foreach (var peer in _observed)
                 if (!visited.Contains(peer)) Observe(peer, false);
             foreach (var peer in visited)
@@ -109,13 +145,13 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
         }
         catch (Exception error)
         {
-            _invokable.Clear();
+            _actionable.Clear();
             _reportError(error.ToString());
         }
     }
 
     private void Add(AutomationPeer peer, int parent, int depth, Rect clip,
-        List<OpenHarmonyAccessibilityNode> nodes, Dictionary<int, AutomationPeer> invokable,
+        List<OpenHarmonyAccessibilityNode> nodes, Dictionary<int, AutomationPeer> actionable,
         HashSet<AutomationPeer> visited)
     {
         if (visited.Count >= MaximumNodes || depth >= MaximumDepth || !visited.Add(peer))
@@ -128,24 +164,53 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
         {
             int id = isRoot ? 1 : _identities.GetValue(peer, _ => new NodeId(checked(++_nextId))).Value;
             var state = OpenHarmonyAccessibilityState.Enabled;
+            var scrollOffset = 0;
             if (!isRoot)
             {
                 state = peer.IsEnabled() ? OpenHarmonyAccessibilityState.Enabled : 0;
                 if (peer.IsKeyboardFocusable()) state |= OpenHarmonyAccessibilityState.Focusable;
                 if (peer.HasKeyboardFocus()) state |= OpenHarmonyAccessibilityState.InputFocused;
                 if (peer.GetProvider<IInvokeProvider>() is not null)
-                {
                     state |= OpenHarmonyAccessibilityState.Invokable;
-                    invokable.Add(id, peer);
+                if ((state & OpenHarmonyAccessibilityState.Enabled) != 0 && GetScrollPosition(peer) is { } scroll)
+                {
+                    state |= OpenHarmonyAccessibilityState.Scrollable | scroll.Directions;
+                    scrollOffset = (int)Math.Clamp(Math.Round(scroll.Offset * _root.RenderScaling), 0, int.MaxValue);
                 }
+                if ((state & (OpenHarmonyAccessibilityState.Invokable | OpenHarmonyAccessibilityState.Scrollable)) != 0)
+                    actionable.Add(id, peer);
             }
             nodes.Add(new(id, parent, isRoot ? "Stack" : Role(peer.GetAutomationControlType()),
-                isRoot ? "" : peer.GetName() ?? "", pixels, state));
+                isRoot ? "" : peer.GetName() ?? "", pixels, state) { ScrollOffset = scrollOffset });
             parent = id;
         }
 
         foreach (var child in peer.GetChildren())
-            Add(child, parent, depth + 1, clip, nodes, invokable, visited);
+            Add(child, parent, depth + 1, clip, nodes, actionable, visited);
+    }
+
+    private static ScrollPosition? GetScrollPosition(AutomationPeer peer)
+    {
+        if (peer is not ScrollViewerAutomationPeer scroll ||
+            scroll.Owner.Presenter is not ScrollContentPresenter presenter ||
+            presenter.Child is ILogicalScrollable { IsLogicalScrollEnabled: true })
+            return null;
+
+        var vertical = presenter.CanVerticallyScroll && scroll.VerticallyScrollable;
+        if (!vertical && !(presenter.CanHorizontallyScroll && scroll.HorizontallyScrollable))
+            return null;
+
+        var owner = scroll.Owner;
+        var viewport = vertical ? owner.Viewport.Height : owner.Viewport.Width;
+        var maximum = (vertical ? owner.Extent.Height : owner.Extent.Width) - viewport;
+        var offset = vertical ? owner.Offset.Y : owner.Offset.X;
+        if (!(viewport > 0) || !(maximum > 0) || !double.IsFinite(maximum) || !double.IsFinite(offset))
+            return null;
+
+        var directions = offset < maximum ? OpenHarmonyAccessibilityState.ScrollForward : 0;
+        if (offset > 0)
+            directions |= OpenHarmonyAccessibilityState.ScrollBackward;
+        return new(scroll, vertical, Math.Clamp(offset, 0, maximum), directions);
     }
 
     private void Observe(AutomationPeer peer, bool observe)
@@ -169,7 +234,9 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
         if (args.Property == AutomationProperties.NameProperty || args.Property == InputElement.IsFocusedProperty ||
             args.Property == InputElement.IsEffectivelyEnabledProperty || args.Property == InputElement.FocusableProperty ||
             args.Property == Visual.IsVisibleProperty || args.Property == Visual.BoundsProperty ||
-            args.Property == ContentControl.ContentProperty || args.Property == TextBlock.TextProperty)
+            args.Property == ContentControl.ContentProperty || args.Property == TextBlock.TextProperty ||
+            args.Property == ScrollViewer.OffsetProperty || args.Property == ScrollViewer.ExtentProperty ||
+            args.Property == ScrollViewer.ViewportProperty)
             Invalidate(sender, args);
     }
 
@@ -186,6 +253,7 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
         AutomationControlType.ProgressBar => "Progress",
         AutomationControlType.RadioButton => "Radio",
         AutomationControlType.ScrollBar => "ScrollBar",
+        AutomationControlType.ScrollViewer => "Scroll",
         AutomationControlType.Slider => "Slider",
         AutomationControlType.Tab => "Tabs",
         AutomationControlType.TabItem => "TabContent",
@@ -200,7 +268,7 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
         foreach (var peer in _observed)
             Observe(peer, false);
         _observed.Clear();
-        _invokable.Clear();
+        _actionable.Clear();
         try
         {
             _publish(new(_surface, Registration, Array.AsReadOnly(Array.Empty<OpenHarmonyAccessibilityNode>())));
@@ -212,4 +280,7 @@ internal sealed class OpenHarmonyAccessibilityTree : IDisposable
     }
 
     private sealed record NodeId(int Value);
+
+    private readonly record struct ScrollPosition(ScrollViewerAutomationPeer Peer, bool Vertical, double Offset,
+        OpenHarmonyAccessibilityState Directions);
 }

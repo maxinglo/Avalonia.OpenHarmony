@@ -6,7 +6,8 @@
 namespace accessibility {
 using Configure = void (*)(int64_t surface, int64_t registration, int32_t enabled);
 using Invoke = void (*)(int64_t surface, int64_t registration, int32_t node);
+using Action = void (*)(int64_t surface, int64_t registration, int32_t node, int32_t action);
 
-int32_t Attach(napi_env env, napi_value nodeContent, int64_t surface, Configure configure, Invoke invoke);
+int32_t Attach(napi_env env, napi_value nodeContent, int64_t surface, Configure configure, Invoke invoke, Action action);
 void Detach(int64_t surface);
 }

@@ -60,6 +60,7 @@ struct AppLibrary {
         paste = reinterpret_cast<decltype(paste)>(dlsym(handle, "avaoh_paste"));
         accessibilityConfigure = reinterpret_cast<decltype(accessibilityConfigure)>(dlsym(handle, "avaoh_accessibility_configure"));
         accessibilityInvoke = reinterpret_cast<decltype(accessibilityInvoke)>(dlsym(handle, "avaoh_accessibility_invoke"));
+        accessibilityAction = reinterpret_cast<decltype(accessibilityAction)>(dlsym(handle, "avaoh_accessibility_action"));
     }
 
     // Keep the NativeAOT library loaded for the process lifetime.
@@ -88,6 +89,7 @@ struct AppLibrary {
     void (*paste)() = nullptr;
     accessibility::Configure accessibilityConfigure = nullptr;
     accessibility::Invoke accessibilityInvoke = nullptr;
+    accessibility::Action accessibilityAction = nullptr;
 
     bool ready() const { return resize != nullptr && destroy != nullptr && touch != nullptr; }
 };
@@ -563,7 +565,8 @@ napi_value ConfigureAccessibility(napi_env env, napi_callback_info info)
             result = 0;
         } else {
             auto& app = App();
-            result = accessibility::Attach(env, args[2], token, app.accessibilityConfigure, app.accessibilityInvoke);
+            result = accessibility::Attach(env, args[2], token, app.accessibilityConfigure, app.accessibilityInvoke,
+                app.accessibilityAction);
         }
     }
     napi_value value;
