@@ -4,6 +4,9 @@
 #include <arkui/native_interface_accessibility.h>
 #include <arkui/native_node.h>
 #include <arkui/native_node_napi.h>
+#ifdef AVALONIA_OHOS_TRACE_ACCESSIBILITY_SCROLL
+#include <hilog/log.h>
+#endif
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -31,6 +34,10 @@ constexpr auto GainFocus = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_GAIN_ACCESSIBI
 constexpr auto ClearFocus = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_CLEAR_ACCESSIBILITY_FOCUS;
 constexpr auto ScrollForward = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_SCROLL_FORWARD;
 constexpr auto ScrollBackward = ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_SCROLL_BACKWARD;
+#ifdef AVALONIA_OHOS_TRACE_ACCESSIBILITY_SCROLL
+constexpr unsigned AccessibilityLogDomain = 0x0202;
+constexpr char AccessibilityLogTag[] = "AvaloniaOHOS";
+#endif
 
 struct NativeNode {
     int32_t id, parent;
@@ -276,12 +283,16 @@ int32_t Execute(const char* instance, int64_t id, ArkUI_Accessibility_ActionType
         return Ok;
     }
     if (SupportsScroll(*node, registration->action != nullptr)) {
-        if (action == ScrollForward && (node->state & CanScrollForward)) {
-            registration->action(registration->surface, registration->generation, node->id, ManagedScrollForward);
-            return Ok;
-        }
-        if (action == ScrollBackward && (node->state & CanScrollBackward)) {
-            registration->action(registration->surface, registration->generation, node->id, ManagedScrollBackward);
+        const bool forward = action == ScrollForward && (node->state & CanScrollForward) != 0;
+        const bool backward = action == ScrollBackward && (node->state & CanScrollBackward) != 0;
+        if (forward || backward) {
+#ifdef AVALONIA_OHOS_TRACE_ACCESSIBILITY_SCROLL
+            OH_LOG_Print(LOG_APP, LOG_INFO, AccessibilityLogDomain, AccessibilityLogTag,
+                "Accessibility scroll request: surface=%{public}lld node=%{public}d direction=%{public}s",
+                static_cast<long long>(registration->surface), node->id, forward ? "forward" : "backward");
+#endif
+            registration->action(registration->surface, registration->generation, node->id,
+                forward ? ManagedScrollForward : ManagedScrollBackward);
             return Ok;
         }
     }
@@ -421,6 +432,18 @@ extern "C" void avaoh_submit_accessibility(int64_t surface, int64_t generation, 
         std::lock_guard lock(StateLock);
         auto* registration = FindRegistration(surface);
         if (!registration || registration->generation != generation) return;
+#ifdef AVALONIA_OHOS_TRACE_ACCESSIBILITY_SCROLL
+        for (const auto id : tree->order) {
+            const auto& node = tree->nodes.at(id);
+            if (!SupportsScroll(node, registration->action != nullptr)) continue;
+            const auto* previous = registration->tree ? Find(*registration->tree, id) : nullptr;
+            if (previous && previous->state == node.state && previous->scrollOffset == node.scrollOffset) continue;
+            OH_LOG_Print(LOG_APP, LOG_INFO, AccessibilityLogDomain, AccessibilityLogTag,
+                "Accessibility scroll position: surface=%{public}lld node=%{public}d offset=%{public}d px "
+                "forward=%{public}d backward=%{public}d", static_cast<long long>(surface), id, node.scrollOffset,
+                (node.state & CanScrollForward) != 0, (node.state & CanScrollBackward) != 0);
+        }
+#endif
         if (tree->nodes.find(registration->focus) == tree->nodes.end()) registration->focus = 0;
         registration->tree = std::move(tree);
     } catch (...) {

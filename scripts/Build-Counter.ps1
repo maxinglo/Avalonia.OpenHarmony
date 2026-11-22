@@ -11,6 +11,7 @@ param(
     [switch]$StageOnly,
     [switch]$UseEgl,
     [switch]$TraceImePreview,
+    [switch]$ScreenReaderScroll,
     [switch]$Windowed
 )
 
@@ -40,7 +41,8 @@ $traceImeValue = $TraceImePreview.IsPresent.ToString().ToLowerInvariant()
 $useWindowedValue = $Windowed.IsPresent.ToString().ToLowerInvariant()
 $build = Join-Path $repository "artifacts/build/$Abi$renderingSuffix$diagnosticsSuffix"
 $managed = Join-Path $build 'managed'
-$hap = Join-Path $build 'Hap'
+$hapName = if ($ScreenReaderScroll) { 'Hap-screenreader-scroll' } else { 'Hap' }
+$hap = Join-Path $build $hapName
 if (!$NuGetRoot) { $NuGetRoot = Join-Path $repository 'artifacts/cache/nuget' }
 if (!$HvigorHome) { $HvigorHome = Join-Path $repository 'artifacts/cache/hvigor' }
 if (!$OhPmHome) { $OhPmHome = Join-Path $repository 'artifacts/cache/ohpm' }
@@ -93,6 +95,19 @@ Copy-Item -Path (Join-Path $nativeSource '*') -Destination $cpp -Force
 $moduleProfilePath = Join-Path $hap 'entry/build-profile.json5'
 $moduleProfile = Get-Content -LiteralPath $moduleProfilePath -Raw | ConvertFrom-Json
 $moduleProfile.buildOption.externalNativeOptions.abiFilters = @($Abi)
+if ($ScreenReaderScroll) {
+    $pagePath = Join-Path $entry 'ets/pages/Index.ets'
+    $page = Get-Content -LiteralPath $pagePath -Raw
+    $accessibilitySetting = 'enableAccessibility: boolean = false;'
+    $surfaceLayout = '}).layoutWeight(1)'
+    if (!$page.Contains($accessibilitySetting) -or !$page.Contains($surfaceLayout)) {
+        throw 'Could not locate the Counter accessibility and viewport settings.'
+    }
+    $page.Replace($accessibilitySetting, 'enableAccessibility: boolean = true;').
+        Replace($surfaceLayout, '}).height(280)') | Set-Content -LiteralPath $pagePath -Encoding utf8 -NoNewline
+    $moduleProfile.buildOption.externalNativeOptions | Add-Member -Force -NotePropertyName arguments `
+        -NotePropertyValue @('-DAVALONIA_OHOS_TRACE_ACCESSIBILITY_SCROLL=ON')
+}
 $moduleProfile | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $moduleProfilePath -Encoding utf8
 
 $libs = Join-Path $hap "entry/libs/$Abi"
@@ -203,7 +218,8 @@ try {
     $archive.Dispose()
 }
 
-$packageDirectory = Join-Path $repository "artifacts/packages/$Abi/$BuildMode$renderingSuffix$diagnosticsSuffix"
+$fixtureSuffix = if ($ScreenReaderScroll) { '/screenreader-scroll' } else { '' }
+$packageDirectory = Join-Path $repository "artifacts/packages/$Abi/$BuildMode$renderingSuffix$diagnosticsSuffix$fixtureSuffix"
 New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
 $package = Join-Path $packageDirectory 'AvaloniaCounter-unsigned.hap'
 Copy-Item -LiteralPath $builtHap -Destination $package -Force

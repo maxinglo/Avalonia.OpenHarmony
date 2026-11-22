@@ -28,3 +28,26 @@ logs with `OpenHarmonyInputDiagnostics`.
 The default embedded host and AudioSynx use one application view with Avalonia menus and dropdowns. A separate EGL
 rotation check and independent native windows require further platform verification. The outbound system source
 accepts plain text and rejects file offers. [Outbound file scope](text-drag-source.md#outbound-file-scope)
+
+## ScreenReader scroll check
+
+Build the Counter with `-Abi x86_64 -Windowed -ScreenReaderScroll` on API 26. This stages a separate HAP with
+accessibility enabled, a 280 vp Avalonia surface that gives the Counter a vertically overflowing viewport, and
+native logs for scroll requests and published offsets. Use `-StageOnly` to open the staged project in DevEco
+Studio for signing.
+
+1. Enable ScreenReader, open Counter and tap **Add one** once to focus it. The `AvaloniaOHOS` log should include
+   `Accessibility scroll position` at offset `0 px` with `forward=1 backward=0`.
+2. Check which gestures are assigned to forward and backward scroll under **Settings > Accessibility >
+   ScreenReader > More settings > Custom gestures**. If left-then-right is assigned to forward scroll, hold
+   the mouse button over the Counter surface, move left and then right without releasing, and release.
+   Reverse the movement for backward scroll if assigned. The system also supports two-finger scrolling.
+   In an instrumented UiTest, use `Driver.injectMultiPointerAction` with two parallel vertical touch paths.
+3. Confirm an `Accessibility scroll request` log with `direction=forward` followed by a larger offset for the
+   same surface and node. The sample should reveal controls from further down the page. Repeat to reach
+   `forward=0`, then scroll backward until the offset returns to `0 px` and `backward=0`. Observe any speech
+   feedback separately. A position change alone can come from normal touch input.
+
+[ScreenReader gestures](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/arkts-universal-attributes-accessibility/)
+· [Forward and backward gestures](https://consumer.huawei.com/cn/support/content/zh-cn16030881/)
+· [UiTest pointer paths](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-uitest/)
