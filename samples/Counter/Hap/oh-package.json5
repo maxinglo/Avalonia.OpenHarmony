@@ -1,0 +1,6 @@
+{
+  "modelVersion": "26.0.0",
+  "name": "avalonia-openharmony-counter",
+  "version": "1.0.0",
+  "dependencies": {}
+}

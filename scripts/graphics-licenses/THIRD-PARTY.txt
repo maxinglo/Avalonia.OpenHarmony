@@ -1,0 +1,31 @@
+Avalonia.OpenHarmony graphics dependencies
+
+SkiaSharp NativeAssets.Linux 3.119.4 and HarfBuzzSharp NativeAssets.Linux 8.3.1.3 originate from the official NuGet releases. Their license and third-party notice files accompany the corresponding libraries.
+
+The font and image dependency binaries originate from the following OpenHarmony .NET port revision.
+https://gitcode.com/OpenHarmonyPCDeveloper/ohos_net-opensource/tree/9114affc54e9d7d94246708b841ec7f037119ea6/prebuilt/native
+
+Brotli 1.1.0
+https://github.com/google/brotli/tree/v1.1.0
+
+bzip2 1.0.8
+https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
+
+Expat 2.6.4 for x86_64 and Expat 2.6.3 for arm64-v8a. Both releases contain the same license notice.
+https://github.com/libexpat/libexpat/releases/tag/R_2_6_4
+https://github.com/libexpat/libexpat/releases/tag/R_2_6_3
+
+Fontconfig 2.15.0
+https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz
+
+FreeType 2.13.3
+Portions of this software are copyright © 2024 The FreeType Project (www.freetype.org). All rights reserved.
+https://github.com/freetype/freetype/tree/VER-2-13-3
+
+libpng 1.6.44
+https://github.com/pnggroup/libpng/tree/v1.6.44
+
+zlib 1.3.1
+https://github.com/madler/zlib/tree/v1.3.1
+
+The packaging script changes the Linux musl library name in the pinned ELF inputs to OpenHarmony's libc.so. The prepared files differ from the upstream binaries, which remain available at the sources listed above.

@@ -1,0 +1,13 @@
+/artifacts/
+**/bin/
+**/obj/
+**/.hvigor/
+**/oh_modules/
+**/.cxx/
+/.idea/
+/.vs/
+*.user
+*.p12
+*.pfx
+*.p7b
+*.jks
