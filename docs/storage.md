@@ -63,8 +63,13 @@ System file selection and a 24-byte file write/read have been verified on API 26
 checks picker serialization, save type mapping, cancellation, escaped Unicode paths, and file descriptor
 ownership. A separate Windows probe exercises bookmark lifecycle against a simulated OS grant and performs
 scoped file operations on test fixtures through a native shim. The API 26 ArkTS handler compiles, and the SDK
-validates the directory structure and native symbols for x86_64 and arm64. Device verification of persistent
-permissions, move, and delete still requires an opted-in system test.
+validates the directory structure and native symbols for x86_64 and arm64.
+
+An isolated API 26 x86_64 bookmark probe saved a token for a picker-selected fixture and reloaded its full
+24-byte content in a fresh process without reopening the picker. The system's revoke call returned success.
+A third process still opened the same fixture after revocation, and the persistent policy check reported
+false throughout the run. The test cleared its app-private token. The device authorization
+and revocation guarantees, directory move, and deletion still need verification on a target device.
 
 - [Selecting user files](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/select-user-file/)
 - [Document picker API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-file-picker/)
