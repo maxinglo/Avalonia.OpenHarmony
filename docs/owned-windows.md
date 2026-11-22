@@ -53,6 +53,12 @@ On Windows, run `dotnet run --project tests/ChildInsetsProbe` to exercise the ho
 Avalonia windows with injected native geometry. For a device check, focus the Counter
 child's TextBox and follow the `Input pane` and `Safe area` messages in HiLog.
 
+In the combined API 26 x86_64 Counter build, the owned window kept system focus when its
+TextBox attached to the native input method. Its input pane reported open with an empty
+occlusion rectangle. The owned window stood above the fixed keyboard area reported for the
+main window. An overlapping fixed keyboard in a window mode that supplies child avoid areas
+still needs a device check. The Windows probe covers overlapping child geometry.
+
 ## Verification
 
 A Windows probe exercised a real Avalonia owner and child with separate Skia frames,

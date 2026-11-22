@@ -48,6 +48,11 @@ Studio for signing.
    `forward=0`, then scroll backward until the offset returns to `0 px` and `backward=0`. Observe any speech
    feedback separately. A position change alone can come from normal touch input.
 
+The API 26 Huawei_TripleFold run published the initial scroll offset and updated it after
+ordinary touch scrolling. The installed standalone UiTest runner returned no Driver for
+the continuous gesture test. A system scroll action reaching the native callback remains
+to be verified on a device with a working gesture path.
+
 [ScreenReader gestures](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/arkts-universal-attributes-accessibility/)
 · [Forward and backward gestures](https://consumer.huawei.com/cn/support/content/zh-cn16030881/)
 · [UiTest pointer paths](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-uitest/)
