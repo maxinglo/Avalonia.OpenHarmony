@@ -146,8 +146,10 @@ public sealed partial class OpenHarmonyHost
         {
             CloseAccessibility(previousToken);
             _childSurfaces.Remove(previousToken);
+            ResetChildInsets(route);
         }
         _childSurfaces[token] = route;
+        RefreshChildInsets(route);
         RefreshChildInputMethod(route);
     });
 
@@ -160,7 +162,8 @@ public sealed partial class OpenHarmonyHost
         CloseAccessibility(token);
         _childSurfaces.Remove(token);
         Volatile.Write(ref route.Token, 0);
-        route.Offset = default;
+        ResetChildInsets(route);
+        RefreshChildInsets(route);
         RefreshChildInputMethod(route);
         route.Window.ReportSurfaceUnavailable();
     });
@@ -286,6 +289,8 @@ public sealed partial class OpenHarmonyHost
             CloseAccessibility(route.Token);
             _childSurfaces.Remove(route.Token);
             Volatile.Write(ref route.Token, 0);
+            ResetChildInsets(route);
+            RefreshChildInsets(route);
         }
     }
 
@@ -318,11 +323,15 @@ public sealed partial class OpenHarmonyHost
 
     private void RefreshChildInputMethod(WindowRoute route)
     {
-        var active = !route.Window.IsCloseRequested &&
-            _applicationForeground && route.Focused && route.Visible && route.Token != 0;
+        var active = IsChildInputMethodActive(route);
+        if (!active && route.Insets.SetArea(OpenHarmonyAvoidAreaKind.Keyboard, default))
+            RefreshChildInsets(route);
         route.Window.Surface.SetInputMethodActive(active);
         route.Window.ReportFocus(active);
     }
+
+    private bool IsChildInputMethodActive(WindowRoute route) => !route.Window.IsCloseRequested &&
+        _applicationForeground && route.Focused && route.Visible && route.Token != 0;
 
     private IInputElement? FocusedWindowElement()
     {
@@ -380,6 +389,8 @@ public sealed partial class OpenHarmonyHost
         public long DisplayId;
         public PixelRect Frame;
         public PixelPoint Offset;
+        public bool HasOffset;
+        public readonly OpenHarmonyInsetsState Insets = new();
         public bool Visible;
         public bool Focused;
     }

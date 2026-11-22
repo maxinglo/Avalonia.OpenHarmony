@@ -92,10 +92,12 @@ public sealed partial class OpenHarmonyHost
     /// <summary>Updates the XComponent origin in pixels relative to the hosted window.</summary>
     public void SetSurfaceOffset(long surface, PixelPoint offset) => Post(() =>
     {
-        if (_childSurfaces.TryGetValue(surface, out var child))
+        if (_childSurfaces.TryGetValue(surface, out var child) && !child.Window.IsCloseRequested)
         {
             child.Offset = offset;
+            child.HasOffset = true;
             RefreshChildOrigin(child);
+            RefreshChildInsets(child);
             return;
         }
         if ((_stageRoute?.Token ?? _topLevel?.Surface) != surface)

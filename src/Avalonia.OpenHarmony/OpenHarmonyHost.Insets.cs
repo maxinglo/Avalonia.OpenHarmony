@@ -39,6 +39,17 @@ public sealed partial class OpenHarmonyHost
             RefreshWindowInsets();
     });
 
+    /// <summary>Reports the current child surface's avoidance area in window-local physical pixels.</summary>
+    public void SetChildAvoidArea(long surface, OpenHarmonyAvoidAreaKind kind, OpenHarmonyAvoidArea area) => Post(() =>
+    {
+        if (!_childSurfaces.TryGetValue(surface, out var child) || child.Window.IsCloseRequested)
+            return;
+        if (kind == OpenHarmonyAvoidAreaKind.Keyboard && !IsChildInputMethodActive(child))
+            return;
+        if (child.Insets.SetArea(kind, area))
+            RefreshChildInsets(child);
+    });
+
     /// <summary>Reports the window's current immersive layout and status bar background.</summary>
     public void SetWindowInsetProperties(bool edgeToEdge, Color? statusBarColor) => Post(() =>
     {
@@ -61,5 +72,19 @@ public sealed partial class OpenHarmonyHost
             var surface = _hasSurfaceOffset ? new PixelRect(_surfaceOffset, topLevel.PixelSize) : default;
             _windowInsets.Apply(topLevel.Insets, topLevel.InputPane, surface, topLevel.RenderScaling);
         }
+    }
+
+    private static void RefreshChildInsets(WindowRoute route)
+    {
+        var surface = route.Window.Surface;
+        var bounds = route.HasOffset ? new PixelRect(route.Offset, surface.PixelSize) : default;
+        route.Insets.Apply(surface.Insets, surface.InputPane, bounds, surface.RenderScaling);
+    }
+
+    private static void ResetChildInsets(WindowRoute route)
+    {
+        route.Offset = default;
+        route.HasOffset = false;
+        route.Insets.Clear();
     }
 }

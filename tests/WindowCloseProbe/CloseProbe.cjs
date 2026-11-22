@@ -48,10 +48,15 @@ class NativeWindow {
     this.listeners = new Map();
     this.visible = false;
     this.modal = !!options.isModal;
+    this.avoidanceEnabled = false;
     this.destroyCalls = 0;
   }
   on(type, callback) { this.listeners.set(type, callback); }
   getWindowProperties() { return { id: 18, displayId: 0, windowRect: rect }; }
+  async setSystemAvoidAreaEnabled(value) {
+    if (this.behavior.avoidanceFails) throw new Error('avoidance unavailable');
+    this.avoidanceEnabled = value;
+  }
   async loadContent() { if (this.behavior.loadFails) throw new Error('load failed'); }
   async showWindow() { this.visible = true; }
   async destroyWindow() {
@@ -96,6 +101,7 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   next = { destroyFails: 2 };
   assert.equal(await send(1, 'show', true), '');
   const first = native.get('AvaloniaChild1');
+  assert.equal(first.avoidanceEnabled, true);
   assert.equal(await send(1, 'close'), null);
   assert.equal(native.get('AvaloniaChild1'), first);
   assert.equal(first.modal, false);
@@ -121,8 +127,9 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   assert.equal(second.destroyCalls, 2);
   calls.push('Partial show and failed cleanup keep their exact window for retry');
 
-  next = { hideFails: true, destroyFails: 1 };
+  next = { hideFails: true, destroyFails: 1, avoidanceFails: true };
   assert.equal(await send(3, 'show', true), '');
+  assert.equal(native.get('AvaloniaChild3').avoidanceEnabled, false);
   assert.equal(await send(3, 'close'), null);
   assert.ok(has(3, 6));
   assert.ok(!has(3, 1));
@@ -132,6 +139,7 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
 
   next = { destroyFails: 1, absentOnRejection: true };
   assert.equal(await send(4, 'show'), '');
+  assert.equal(native.get('AvaloniaChild4').avoidanceEnabled, false);
   assert.equal(await send(4, 'close'), '');
   assert.equal(native.has('AvaloniaChild4'), false);
   assert.ok(has(4, 4));

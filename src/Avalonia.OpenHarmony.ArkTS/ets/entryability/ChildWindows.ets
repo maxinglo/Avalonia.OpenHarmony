@@ -28,6 +28,10 @@ interface WindowRequest {
 
 export const childWindowPage: string = 'pages/AvaloniaChildWindow';
 
+export function childWindowName(key: number): string {
+  return 'AvaloniaChild' + key;
+}
+
 export function reportStageDestroyed(): void {
   bridge.reportChildEvent(0, ChildEvent.Destroyed);
 }
@@ -127,7 +131,7 @@ export class ChildWindows {
       width,
       height
     };
-    const name = this.windowName(key);
+    const name = childWindowName(key);
     const options: window.SubWindowOptions = {
       title: request.title || 'Avalonia child window',
       windowRect: rect,
@@ -147,6 +151,18 @@ export class ChildWindows {
       if (!this.active) {
         await this.close(key);
         return false;
+      }
+
+      if (request.modal) {
+        try {
+          await child.setSystemAvoidAreaEnabled(true);
+        } catch (error) {
+          this.warnClose(key, 'enable system avoidance', error as Error);
+        }
+        if (!this.active || this.windows.get(key) !== child) {
+          await this.close(key);
+          return false;
+        }
       }
 
       this.publishFrame(key, child);
@@ -188,7 +204,7 @@ export class ChildWindows {
     let child = this.windows.get(key);
     if (child === undefined) {
       try {
-        child = window.findWindow(this.windowName(key));
+        child = window.findWindow(childWindowName(key));
         this.windows.set(key, child);
       } catch (error) {
         if ((error as BusinessError).code === 1300002) {
@@ -234,15 +250,11 @@ export class ChildWindows {
 
   private isWindowMissing(key: number): boolean {
     try {
-      window.findWindow(this.windowName(key));
+      window.findWindow(childWindowName(key));
       return false;
     } catch (error) {
       return (error as BusinessError).code === 1300002;
     }
-  }
-
-  private windowName(key: number): string {
-    return 'AvaloniaChild' + key;
   }
 
   private warnClose(key: number, operation: string, error: Error): void {

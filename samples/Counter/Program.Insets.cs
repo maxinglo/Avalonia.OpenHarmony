@@ -13,9 +13,19 @@ public static partial class Program
     {
         if (data == null)
             return;
-        Host.Value.SetWindowAvoidArea((OpenHarmonyAvoidAreaKind)kind,
-            new OpenHarmonyAvoidArea(ReadRect(data), ReadRect(data + 4), ReadRect(data + 8), ReadRect(data + 12)));
+        Host.Value.SetWindowAvoidArea((OpenHarmonyAvoidAreaKind)kind, ReadAvoidArea(data));
     }
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_set_child_avoid_area")]
+    public static unsafe void SetChildAvoidArea(long surface, int kind, int* data)
+    {
+        if (data == null)
+            return;
+        Host.Value.SetChildAvoidArea(surface, (OpenHarmonyAvoidAreaKind)kind, ReadAvoidArea(data));
+    }
+
+    private static unsafe OpenHarmonyAvoidArea ReadAvoidArea(int* data) =>
+        new(ReadRect(data), ReadRect(data + 4), ReadRect(data + 8), ReadRect(data + 12));
 
     private static unsafe PixelRect ReadRect(int* data) => new(data[0], data[1], data[2], data[3]);
 

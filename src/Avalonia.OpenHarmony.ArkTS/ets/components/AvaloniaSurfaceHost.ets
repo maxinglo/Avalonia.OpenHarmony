@@ -1,10 +1,12 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { accessibility } from '@kit.AccessibilityKit';
-import { dragController, NodeContent } from '@kit.ArkUI';
+import { dragController, NodeContent, window } from '@kit.ArkUI';
 import { unifiedDataChannel } from '@kit.ArkData';
 import bridge from 'libavalonia_ohos_bridge.so';
 import { AvaloniaDropReceiver, avaloniaDropTypes } from './AvaloniaDropReceiver';
 import { AvaloniaTextDragSource } from './AvaloniaTextDragSource';
+import { childWindowName } from '../entryability/ChildWindows';
+import { WindowInsetsObserver } from '../entryability/WindowInsets';
 
 class SurfaceController extends XComponentController {
   surfaceId: string = '';
@@ -12,7 +14,9 @@ class SurfaceController extends XComponentController {
   offsetX: number = 0;
   offsetY: number = 0;
   windowKey: number = 0;
+  attached: boolean = false;
   textDragSource: AvaloniaTextDragSource | undefined;
+  private childInsets: WindowInsetsObserver | undefined;
   private mouseButtons: number = 0;
   private mouseX: number = 0;
   private mouseY: number = 0;
@@ -21,6 +25,9 @@ class SurfaceController extends XComponentController {
   geometryChanged: () => void = (): void => {};
 
   onSurfaceCreated(surfaceId: string): void {
+    if (this.surfaceId !== surfaceId) {
+      this.stopChildInsets();
+    }
     this.surfaceId = surfaceId;
   }
 
@@ -38,6 +45,11 @@ class SurfaceController extends XComponentController {
         bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale);
       }
       this.geometryChanged();
+      if (this.attached && this.windowKey > 0 && this.childInsets === undefined) {
+        const child = window.findWindow(childWindowName(this.windowKey));
+        this.childInsets = new WindowInsetsObserver(child, surfaceId);
+        this.childInsets.start();
+      }
     } catch (error) {
       hilog.error(0x0202, 'AvaloniaOHOS', '%{public}s', (error as Error).message);
     }
@@ -45,11 +57,17 @@ class SurfaceController extends XComponentController {
 
   onSurfaceDestroyed(surfaceId: string): void {
     if (this.surfaceId === surfaceId) {
+      this.stopChildInsets();
       this.textDragSource?.surfaceDestroyed();
       this.surfaceId = '';
       this.resetHardwareState();
     }
     bridge.closeSurface(surfaceId);
+  }
+
+  stopChildInsets(): void {
+    this.childInsets?.stop();
+    this.childInsets = undefined;
   }
 
   onTouch(event: TouchEvent): void {
@@ -207,6 +225,7 @@ export struct AvaloniaSurfaceHost {
   };
 
   aboutToAppear(): void {
+    this.surface.attached = true;
     this.surface.windowKey = this.windowKey;
     this.surface.readScale = (): number => this.getUIContext().vp2px(1);
     this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
@@ -221,6 +240,8 @@ export struct AvaloniaSurfaceHost {
   }
 
   aboutToDisappear(): void {
+    this.surface.attached = false;
+    this.surface.stopChildInsets();
     this.surface.textDragSource?.surfaceDestroyed();
     if (this.enableInboundDrop && this.surface.surfaceId) {
       bridge.drag(this.surface.surfaceId, 2, 0, 0, 0, 0, '');

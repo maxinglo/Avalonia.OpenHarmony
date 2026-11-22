@@ -24,6 +24,8 @@ disables its owner's input while the dialog is open.
 - Export `avaoh_update_child_surface`, `avaoh_close_child_surface`, `avaoh_report_child_frame`,
   `avaoh_report_child_event`, and `avaoh_request_child_close` from the NativeAOT application.
   Counter implements these callbacks in `samples/Counter/Program.Windows.cs`.
+- To provide child safe area and fixed-keyboard occlusion, export `avaoh_set_child_avoid_area`
+  as in `samples/Counter/Program.Insets.cs`.
 - Run the Counter build with `-Windowed`. The HAP is placed in the `windowed` subdirectory
   for its ABI and build mode. Use the counter and move/resize commands in the modal dialog,
   then select **Return dialog result** and check the main counter remains interactive.
@@ -33,6 +35,23 @@ by the stage. Window decorations and availability depend on the device's window 
 A device that rejects a frame at creation can create a child with platform-default geometry.
 Standalone top levels, owners other than the stage, and desktop controls such as custom
 title-bar drags and native min/max constraints need separate support.
+
+## Child safe areas and keyboard occlusion
+
+Each child observes the avoid areas of its own native window. The backend intersects those
+rectangles with the active XComponent and reports the result in surface-local DIP through
+`Window.InsetsManager` and `Window.InputPane`. The input pane closes when the child loses
+focus. Surface replacement clears both features until fresh geometry arrives.
+
+HarmonyOS availability depends on the device and native window mode. In free-floating
+mode under a freeform window, the OS reports the fixed soft keyboard area. For some other
+modes, a child must match the main window's frame for the OS to supply areas. The backend
+asks modal windows to enable avoidance and continues opening the window if HarmonyOS
+rejects that request. [HarmonyOS Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
+
+On Windows, run `dotnet run --project tests/ChildInsetsProbe` to exercise the hosted
+Avalonia windows with injected native geometry. For a device check, focus the Counter
+child's TextBox and follow the `Input pane` and `Safe area` messages in HiLog.
 
 ## Verification
 
@@ -48,7 +67,7 @@ A modeless owned window also presented a separate frame. It moved to physical po
 
 In the integrated Counter, the child TextBox attached the HarmonyOS input method to the
 child window ID reported by WindowManager. The keyboard opened while that window held focus.
-Insets observation currently follows the stage window. In the accessibility-enabled
+In the accessibility-enabled
 HAP, both open surfaces registered successfully under ScreenReader. Activating the
 main button through ScreenReader incremented its counter. An API 26 x86_64 experiment
 then verified activation in a moved child window. The same result was reproduced with the production bridge. A single touch focused the child

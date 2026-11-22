@@ -377,6 +377,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             }
             Surface.SetInputMethodActive(false);
             RefreshActivation();
+            Surface.InputPane.Apply(false, default);
         }
 
         if (!_closeAttemptInProgress)

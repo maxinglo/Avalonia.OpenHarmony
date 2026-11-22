@@ -53,6 +53,7 @@ struct AppLibrary {
         setWindowPosition = reinterpret_cast<decltype(setWindowPosition)>(dlsym(handle, "avaoh_set_window_position"));
         setSurfaceOffset = reinterpret_cast<decltype(setSurfaceOffset)>(dlsym(handle, "avaoh_set_surface_offset"));
         setAvoidArea = reinterpret_cast<decltype(setAvoidArea)>(dlsym(handle, "avaoh_set_avoid_area"));
+        setChildAvoidArea = reinterpret_cast<decltype(setChildAvoidArea)>(dlsym(handle, "avaoh_set_child_avoid_area"));
         setWindowInsetProperties = reinterpret_cast<decltype(setWindowInsetProperties)>(
             dlsym(handle, "avaoh_set_window_inset_properties"));
         clearWindowInsets = reinterpret_cast<decltype(clearWindowInsets)>(dlsym(handle, "avaoh_clear_window_insets"));
@@ -83,6 +84,7 @@ struct AppLibrary {
     void (*setWindowPosition)(int64_t, int32_t, int32_t) = nullptr;
     void (*setSurfaceOffset)(int64_t, int32_t, int32_t) = nullptr;
     void (*setAvoidArea)(int32_t, const int32_t*) = nullptr;
+    void (*setChildAvoidArea)(int64_t, int32_t, const int32_t*) = nullptr;
     void (*setWindowInsetProperties)(int32_t, int32_t, uint32_t) = nullptr;
     void (*clearWindowInsets)() = nullptr;
     int32_t (*requestBack)() = nullptr;
@@ -297,31 +299,54 @@ napi_value RequestBack(napi_env env, napi_callback_info)
     return result;
 }
 
+bool ReadAvoidArea(napi_env env, napi_value type, napi_value coordinates, int32_t& kind, int32_t* rects)
+{
+    bool isArray = false;
+    uint32_t length = 0;
+    if (napi_get_value_int32(env, type, &kind) != napi_ok || kind < 0 || kind == 2 || kind > 5 ||
+        napi_is_array(env, coordinates, &isArray) != napi_ok || !isArray ||
+        napi_get_array_length(env, coordinates, &length) != napi_ok || length != 16)
+        return false;
+    for (uint32_t i = 0; i < length; ++i) {
+        napi_value element;
+        if (napi_get_element(env, coordinates, i, &element) != napi_ok ||
+            napi_get_value_int32(env, element, &rects[i]) != napi_ok)
+            return false;
+    }
+    return true;
+}
+
 napi_value SetAvoidArea(napi_env env, napi_callback_info info)
 {
     size_t count = 2;
     napi_value args[2];
     int32_t kind;
-    bool isArray = false;
-    uint32_t length = 0;
     int32_t rects[16];
     if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 2 ||
-        napi_get_value_int32(env, args[0], &kind) != napi_ok || kind < 0 || kind == 2 || kind > 5 ||
-        napi_is_array(env, args[1], &isArray) != napi_ok || !isArray ||
-        napi_get_array_length(env, args[1], &length) != napi_ok || length != 16) {
+        !ReadAvoidArea(env, args[0], args[1], kind, rects)) {
         OH_LOG_Print(LOG_APP, LOG_WARN, LogDomain, Tag, "Ignored a malformed window avoidance area");
         return nullptr;
     }
-    for (uint32_t i = 0; i < length; ++i) {
-        napi_value element;
-        if (napi_get_element(env, args[1], i, &element) != napi_ok ||
-            napi_get_value_int32(env, element, &rects[i]) != napi_ok) {
-            OH_LOG_Print(LOG_APP, LOG_WARN, LogDomain, Tag, "Ignored a malformed window avoidance coordinate");
-            return nullptr;
-        }
-    }
     if (auto callback = App().setAvoidArea; callback != nullptr)
         callback(kind, rects);
+    return nullptr;
+}
+
+napi_value SetChildAvoidArea(napi_env env, napi_callback_info info)
+{
+    size_t count = 3;
+    napi_value args[3];
+    uint64_t surfaceId;
+    int32_t kind;
+    int32_t rects[16];
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 3 ||
+        !ParseSurfaceId(env, args[0], surfaceId) || !ReadAvoidArea(env, args[1], args[2], kind, rects)) {
+        OH_LOG_Print(LOG_APP, LOG_WARN, LogDomain, Tag, "Ignored a malformed child window avoidance area");
+        return nullptr;
+    }
+    const auto token = SurfaceToken(surfaceId);
+    if (auto callback = App().setChildAvoidArea; token != 0 && callback != nullptr)
+        callback(token, kind, rects);
     return nullptr;
 }
 
@@ -749,6 +774,7 @@ napi_value Init(napi_env env, napi_value exports)
         {"setWindowPosition", nullptr, SetWindowPosition, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSurfaceOffset", nullptr, SetSurfaceOffset, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setAvoidArea", nullptr, SetAvoidArea, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setChildAvoidArea", nullptr, SetChildAvoidArea, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setWindowInsetProperties", nullptr, SetWindowInsetProperties, nullptr, nullptr, nullptr,
             napi_default, nullptr},
         {"clearWindowInsets", nullptr, ClearWindowInsets, nullptr, nullptr, nullptr, napi_default, nullptr},

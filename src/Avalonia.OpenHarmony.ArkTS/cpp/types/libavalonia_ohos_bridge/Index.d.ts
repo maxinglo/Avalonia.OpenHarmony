@@ -11,6 +11,7 @@ export const refreshDisplays: () => void;
 export const setWindowPosition: (display: number, x: number, y: number) => void;
 export const setSurfaceOffset: (surface: string, x: number, y: number) => void;
 export const setAvoidArea: (kind: number, rects: number[]) => void;
+export const setChildAvoidArea: (surfaceId: string, kind: number, rects: number[]) => void;
 export const setWindowInsetProperties: (edgeToEdge: boolean, hasColor: boolean, color: number) => void;
 export const clearWindowInsets: () => void;
 export const reportChildFrame: (key: number, windowId: number, displayId: number, x: number, y: number,

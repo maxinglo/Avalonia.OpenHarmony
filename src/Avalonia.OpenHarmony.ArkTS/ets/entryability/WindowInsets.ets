@@ -7,7 +7,7 @@ function warn(error: Error): void {
   hilog.warn(0x0202, 'AvaloniaOHOS', 'Window insets: %{public}s', error.message);
 }
 
-function publishArea(kind: window.AvoidAreaType, area: window.AvoidArea): void {
+function publishArea(kind: window.AvoidAreaType, area: window.AvoidArea, surfaceId: string | undefined): void {
   if (kind < window.AvoidAreaType.TYPE_SYSTEM || kind > window.AvoidAreaType.TYPE_FLOAT_NAVIGATION ||
     kind === window.AvoidAreaType.TYPE_SYSTEM_GESTURE) {
     return;
@@ -19,7 +19,11 @@ function publishArea(kind: window.AvoidAreaType, area: window.AvoidArea): void {
     area.bottomRect.left, area.bottomRect.top, area.bottomRect.width, area.bottomRect.height
   ];
   // HarmonyOS defines the rectangles as the authoritative avoidance geometry.
-  bridge.setAvoidArea(kind, rects);
+  if (surfaceId === undefined) {
+    bridge.setAvoidArea(kind, rects);
+  } else {
+    bridge.setChildAvoidArea(surfaceId, kind, rects);
+  }
 }
 
 function statusBarColor(mainWindow: window.Window): string | undefined {
@@ -46,25 +50,27 @@ function publishWindowProperties(mainWindow: window.Window): void {
 }
 
 export class WindowInsetsObserver {
-  private mainWindow: window.Window;
+  private hostWindow: window.Window;
+  private surfaceId: string | undefined;
   private listening: boolean = false;
   private avoidAreaChange = (update: window.AvoidAreaOptions): void => {
     if (!this.listening) {
       return;
     }
-    publishArea(update.type, update.area);
-    if (update.type === window.AvoidAreaType.TYPE_SYSTEM) {
-      publishWindowProperties(this.mainWindow);
+    publishArea(update.type, update.area, this.surfaceId);
+    if (this.surfaceId === undefined && update.type === window.AvoidAreaType.TYPE_SYSTEM) {
+      publishWindowProperties(this.hostWindow);
     }
   };
 
-  constructor(mainWindow: window.Window) {
-    this.mainWindow = mainWindow;
+  constructor(hostWindow: window.Window, surfaceId?: string) {
+    this.hostWindow = hostWindow;
+    this.surfaceId = surfaceId;
   }
 
   start(): void {
     try {
-      this.mainWindow.on('avoidAreaChange', this.avoidAreaChange);
+      this.hostWindow.on('avoidAreaChange', this.avoidAreaChange);
       this.listening = true;
     } catch (error) {
       warn(error as Error);
@@ -80,24 +86,28 @@ export class WindowInsetsObserver {
     ];
     for (const kind of initialTypes) {
       try {
-        publishArea(kind, this.mainWindow.getWindowAvoidArea(kind));
+        publishArea(kind, this.hostWindow.getWindowAvoidArea(kind), this.surfaceId);
       } catch (error) {
         warn(error as Error);
       }
     }
-    publishWindowProperties(this.mainWindow);
+    if (this.surfaceId === undefined) {
+      publishWindowProperties(this.hostWindow);
+    }
   }
 
   stop(): void {
     if (this.listening) {
       this.listening = false;
       try {
-        this.mainWindow.off('avoidAreaChange', this.avoidAreaChange);
+        this.hostWindow.off('avoidAreaChange', this.avoidAreaChange);
       } catch (error) {
         warn(error as Error);
       }
     }
-    bridge.clearWindowInsets();
+    if (this.surfaceId === undefined) {
+      bridge.clearWindowInsets();
+    }
   }
 }
 
