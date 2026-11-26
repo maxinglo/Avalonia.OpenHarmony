@@ -9,6 +9,7 @@ import { childWindowName } from '../entryability/ChildWindows';
 import { WindowInsetsObserver } from '../entryability/WindowInsets';
 
 class SurfaceController extends XComponentController {
+  readonly nativeControls: NodeContent = new NodeContent();
   surfaceId: string = '';
   scale: number = 1;
   offsetX: number = 0;
@@ -39,11 +40,8 @@ class SurfaceController extends XComponentController {
       this.scale = this.readScale();
       this.offsetX = rect.offsetX ?? 0;
       this.offsetY = rect.offsetY ?? 0;
-      if (this.windowKey > 0) {
-        bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale, this.windowKey);
-      } else {
-        bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale);
-      }
+      bridge.updateSurface(surfaceId, rect.surfaceWidth, rect.surfaceHeight, this.scale, this.windowKey,
+        this.nativeControls);
       this.geometryChanged();
       if (this.attached && this.windowKey > 0 && this.childInsets === undefined) {
         const child = window.findWindow(childWindowName(this.windowKey));
@@ -231,7 +229,7 @@ export struct AvaloniaSurfaceHost {
     this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
     if (this.enableTextDragSource) {
       this.surface.textDragSource = new AvaloniaTextDragSource(
-        (pointerId: number, text: string): Promise<boolean> => this.startTextDrag(pointerId, text));
+        (pointerId: number, texts: string[]): Promise<boolean> => this.startTextDrag(pointerId, texts));
     }
     if (this.enableAccessibility) {
       this.accessibilityActive = accessibility.isOpenAccessibilitySync();
@@ -259,12 +257,16 @@ export struct AvaloniaSurfaceHost {
       .backgroundColor(0x24549B).borderRadius(12)
   }
 
-  private async startTextDrag(pointerId: number, text: string): Promise<boolean> {
-    const plainText = new unifiedDataChannel.PlainText();
-    plainText.textContent = text;
+  private async startTextDrag(pointerId: number, texts: string[]): Promise<boolean> {
+    const data = new unifiedDataChannel.UnifiedData();
+    for (const text of texts) {
+      const record = new unifiedDataChannel.PlainText();
+      record.textContent = text;
+      data.addRecord(record);
+    }
     const info: dragController.DragInfo = {
       pointerId,
-      data: new unifiedDataChannel.UnifiedData(plainText)
+      data
     };
     try {
       const result = await this.getUIContext().getDragController().executeDrag((): void => this.textDragPreview(), info);
@@ -355,6 +357,9 @@ export struct AvaloniaSurfaceHost {
         .onDragLeave((event: DragEvent) => this.receiveDrag(2, event))
         .onDrop((event: DragEvent) => this.receiveDrag(3, event))
         .onAreaChange((_previous: Area, _current: Area) => this.updateSurfaceOrigin())
+      Stack({ alignContent: Alignment.TopStart }) {
+        ContentSlot(this.surface.nativeControls)
+      }.width('100%').height('100%').clip(true).hitTestBehavior(HitTestMode.None)
       if (this.enableAccessibility) {
         Stack() {
           ContentSlot(this.semantics)

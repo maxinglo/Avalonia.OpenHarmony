@@ -3,6 +3,7 @@ import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import bridge from 'libavalonia_ohos_bridge.so';
 import { registerSystemRequests } from '../services/SystemRequests';
+import { StatusBar } from '../services/StatusBar';
 import { reportStageDestroyed } from './ChildWindows';
 import { HostLifecycle, PlatformWindow, updateTheme } from './PlatformWindow';
 
@@ -17,7 +18,14 @@ export default class EntryAbility extends UIAbility {
       bridge.configureFiles(this.context.filesDir);
       const mainWindow = windowStage.getMainWindowSync();
       bridge.configureInputMethod(mainWindow.getWindowProperties().id);
-      this.stopSystemRequests = registerSystemRequests(this.context, mainWindow, windowStage, false, true, true);
+      const statusBar = new StatusBar(this.context);
+      const stopRequests = registerSystemRequests(this.context, mainWindow, windowStage, false, true, true,
+        (operation: string, argument: string): Promise<string | null> => statusBar.execute(operation, argument));
+      this.stopSystemRequests = (): void => {
+        statusBar.stop();
+        stopRequests();
+      };
+      bridge.reportTrayEvent(0n, '');
       updateTheme(this.context.config);
       this.configured = true;
       if (this.foreground !== undefined) {

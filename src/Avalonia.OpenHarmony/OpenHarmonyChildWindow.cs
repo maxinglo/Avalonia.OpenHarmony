@@ -24,10 +24,20 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     private int _closingModalChildren;
     private PixelPoint? _requestedPosition;
     private PixelSize? _requestedFrameSize;
+    private PixelSize? _requestedStageClientSize;
     private Size _initialClientSize;
+    private Size _minClientSize;
+    private Size _maxClientSize = Size.Infinity;
     private PixelRect? _frame;
     private string? _title;
     private bool _decorated = true;
+    private bool _resizable = true;
+    private bool _stageDesktop;
+    private bool _canMinimize = true;
+    private bool _canMaximize = true;
+    private WindowState _windowState;
+    private WindowState? _requestedWindowState;
+    private int _stageStateRequestVersion;
     private bool _enabled = true;
     private bool _showRequested;
     private bool _shownModally;
@@ -70,7 +80,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     internal bool IsCloseRequested => _closeRequested;
     internal long ZOrder { get; private set; }
     private bool CanRender => _framebufferAvailable && _visible && _avaloniaVisible && !_closeRequested && !_disposed;
-    public IPlatformHandle? Handle => Surface.Handle;
+    public IPlatformHandle? Handle => _closeRequested ? null : Surface.Handle;
     public Size ClientSize => _hasSurfaceGeometry ? Surface.ClientSize : _initialClientSize;
     public Size? FrameSize => _frame is { } frame
         ? new Size(frame.Width / DesktopScaling, frame.Height / DesktopScaling)
@@ -108,9 +118,27 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     public PlatformRequestedDrawnDecoration RequestedDrawnDecorations => 0;
     public Thickness ExtendedMargins => default;
     public Thickness OffScreenMargin => default;
-    public PlatformAllowedWindowActions AllowedWindowActions => PlatformAllowedWindowActions.None;
+    public PlatformAllowedWindowActions AllowedWindowActions => !_stageDesktop ? PlatformAllowedWindowActions.None
+        : PlatformAllowedWindowActions.Fullscreen
+            | (_canMaximize ? PlatformAllowedWindowActions.Maximize : PlatformAllowedWindowActions.None)
+            | (_canMinimize ? PlatformAllowedWindowActions.Minimize : PlatformAllowedWindowActions.None);
+    public Action<PlatformAllowedWindowActions>? AllowedWindowActionsChanged { get; set; }
     public bool WindowStateGetterIsUsable => true;
-    public WindowState WindowState { get => WindowState.Normal; set { } }
+    public WindowState WindowState
+    {
+        get => _windowState;
+        set
+        {
+            if (!_stageDesktop || value == (_requestedWindowState ?? _windowState))
+                return;
+            _requestedWindowState = value;
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetState)
+            {
+                State = value,
+                StateRequestVersion = ++_stageStateRequestVersion
+            });
+        }
+    }
 
     public void Show(bool activate, bool isDialog)
     {
@@ -118,6 +146,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             return;
         if (IsStage)
         {
+            _showRequested = true;
             _avaloniaVisible = true;
             RefreshActivation();
             Paint?.Invoke(new Rect(ClientSize));
@@ -143,7 +172,9 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             Title = _title,
             Modal = isDialog,
             Activate = activate,
-            Decorated = _decorated
+            Decorated = _decorated,
+            Resizable = _resizable ? null : false,
+            Limits = GetWindowLimits(DesktopScaling)
         });
     }
 
@@ -176,6 +207,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             LostFocus?.Invoke();
         }
         _enabled = enable;
+        RefreshNativeControlInput();
     }
 
     public void SetTitle(string? title)
@@ -187,15 +219,47 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetTitle) { Title = title });
     }
 
-    public void SetWindowDecorations(WindowDecorations enabled) => _decorated = enabled != WindowDecorations.None;
+    public void SetWindowDecorations(WindowDecorations enabled)
+    {
+        var decorated = enabled != WindowDecorations.None;
+        if (_decorated == decorated)
+            return;
+        _decorated = decorated;
+        if (!IsStage && _showRequested)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetDecorations)
+            {
+                Decorated = decorated,
+                Resizable = _resizable,
+                Limits = GetWindowLimits(DesktopScaling)
+            });
+    }
 
     public void Resize(Size clientSize, WindowResizeReason reason = WindowResizeReason.Application)
     {
-        if (_closeRequested || _disposed || IsStage || !double.IsFinite(clientSize.Width) || !double.IsFinite(clientSize.Height)
+        if (_closeRequested || _disposed || !double.IsFinite(clientSize.Width) || !double.IsFinite(clientSize.Height)
             || clientSize.Width <= 0 || clientSize.Height <= 0)
             return;
         if (_hasSurfaceGeometry && Surface.ClientSize == clientSize)
             return;
+
+        if (IsStage)
+        {
+            if (!_stageDesktop || !_showRequested || WindowState != WindowState.Normal)
+                return;
+            var pixels = new PixelSize(ToPixelCount(clientSize.Width * DesktopScaling),
+                ToPixelCount(clientSize.Height * DesktopScaling));
+            if (pixels == Surface.PixelSize || pixels == _requestedStageClientSize)
+                return;
+            _requestedStageClientSize = pixels;
+            _requestedResizeReason = reason;
+            // Include the native chrome and any host layout outside the Avalonia surface.
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.Resize)
+            {
+                Size = GetFrameRequest(clientSize, DesktopScaling),
+                StageClientSize = pixels
+            });
+            return;
+        }
 
         _initialClientSize = clientSize;
         if (!_showRequested)
@@ -222,10 +286,52 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     public void SetTopmost(bool value) { }
     public void SetIcon(IWindowIconImpl? icon) { }
     public void ShowTaskbarIcon(bool value) { }
-    public void CanResize(bool value) { }
-    public void SetCanMinimize(bool value) { }
-    public void SetCanMaximize(bool value) { }
-    public void SetMinMaxSize(Size minSize, Size maxSize) { }
+    public void CanResize(bool value)
+    {
+        if (_resizable == value)
+            return;
+        _resizable = value;
+        if (_stageDesktop || !IsStage && _showRequested)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetResizable) { Resizable = value });
+    }
+    public void SetCanMinimize(bool value)
+    {
+        if (_canMinimize == value)
+            return;
+        _canMinimize = value;
+        SetStageCaptionButtons();
+        if (_stageDesktop)
+            AllowedWindowActionsChanged?.Invoke(AllowedWindowActions);
+    }
+
+    public void SetCanMaximize(bool value)
+    {
+        if (_canMaximize == value)
+            return;
+        _canMaximize = value;
+        SetStageCaptionButtons();
+        if (_stageDesktop)
+            AllowedWindowActionsChanged?.Invoke(AllowedWindowActions);
+    }
+
+    private void SetStageCaptionButtons()
+    {
+        if (_stageDesktop)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetCaptionButtons)
+            {
+                CanMinimize = _canMinimize,
+                CanMaximize = _canMaximize
+            });
+    }
+    public void SetMinMaxSize(Size minSize, Size maxSize)
+    {
+        if (_minClientSize == minSize && _maxClientSize == maxSize)
+            return;
+        _minClientSize = minSize;
+        _maxClientSize = maxSize;
+        if (!IsStage && _showRequested)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetLimits) { Limits = GetWindowLimits(DesktopScaling) ?? default(OpenHarmonyWindowLimits) });
+    }
     public void SetExtendClientAreaToDecorationsHint(bool extendIntoClientAreaHint) { }
     public void SetExtendClientAreaTitleBarHeightHint(double titleBarHeight) { }
     public void BeginMoveDrag(PointerPressedEventArgs e) { }
@@ -242,6 +348,35 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     IFramebufferRenderTarget IFramebufferPlatformSurface.CreateFramebufferRenderTarget() =>
         Surface.CreateFramebufferRenderTarget();
+
+    internal void ReportStageDesktop(bool enabled)
+    {
+        if (_stageDesktop == enabled || _closeRequested || _disposed)
+            return;
+        _stageDesktop = enabled;
+        AllowedWindowActionsChanged?.Invoke(AllowedWindowActions);
+        if (!enabled)
+        {
+            _requestedWindowState = null;
+            ReportWindowState(WindowState.Normal);
+            return;
+        }
+        if (!_canMinimize || !_canMaximize)
+            SetStageCaptionButtons();
+        if (!_resizable)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetResizable) { Resizable = false });
+    }
+
+    internal void ReportWindowState(WindowState state)
+    {
+        if (_windowState == state || _closeRequested || _disposed)
+            return;
+        _windowState = state;
+        if (_requestedWindowState == state)
+            _requestedWindowState = null;
+        _requestedStageClientSize = null;
+        WindowStateChanged?.Invoke(state);
+    }
 
     internal void ReportFrame(PixelRect frame)
     {
@@ -263,12 +398,18 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         _resizeReason = !_hasSurfaceGeometry ? WindowResizeReason.Application
             : reason != WindowResizeReason.Unspecified ? reason
             : Surface.RenderScaling != scaling ? WindowResizeReason.DpiChange
+            : IsStage && _requestedStageClientSize == new PixelSize(width, height) ? _requestedResizeReason
             : _requestedFrameSize is { } requested && _frame?.Size == requested ? _requestedResizeReason
             : WindowResizeReason.Unspecified;
+        if (IsStage && Surface.PixelSize != new PixelSize(width, height))
+            _requestedStageClientSize = null;
         if (_frame?.Size == _requestedFrameSize)
             _requestedFrameSize = null;
+        var previousScaling = DesktopScaling;
         _hasSurfaceGeometry = true;
         Surface.Resize(width, height, scaling);
+        if (!IsStage && _showRequested && previousScaling != scaling && GetWindowLimits(scaling) is { } limits)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetLimits) { Limits = limits });
         _framebufferAvailable = true;
         RefreshActivation();
         Paint?.Invoke(new Rect(ClientSize));
@@ -374,6 +515,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
                 // Avalonia clears Owner after Dispose returns, before async native destruction.
                 _closingModalOwner = owner;
                 owner._closingModalChildren++;
+                owner.RefreshNativeControlInput();
             }
             Surface.SetInputMethodActive(false);
             RefreshActivation();
@@ -413,7 +555,10 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             return;
         _closingModalOwner = null;
         owner._closingModalChildren--;
+        owner.RefreshNativeControlInput();
     }
+
+    private void RefreshNativeControlInput() => Surface.SetNativeControlInputEnabled(_enabled && _closingModalChildren == 0);
 
     private void DispatchInput(RawInputEventArgs args)
     {
@@ -438,6 +583,19 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
 
     private static int ToPixelCount(double pixels) => (int)Math.Clamp(Math.Ceiling(pixels), 1, int.MaxValue);
 
+    private OpenHarmonyWindowLimits? GetWindowLimits(double scaling)
+    {
+        var minWidth = _minClientSize.Width > 0 ? ToPixelCount(_minClientSize.Width * scaling) : (int?)null;
+        var minHeight = _minClientSize.Height > 0 ? ToPixelCount(_minClientSize.Height * scaling) : (int?)null;
+        var maxWidth = GetMaximum(_maxClientSize.Width, minWidth);
+        var maxHeight = GetMaximum(_maxClientSize.Height, minHeight);
+        return minWidth.HasValue || minHeight.HasValue || maxWidth.HasValue || maxHeight.HasValue
+            ? new(minWidth, minHeight, maxWidth, maxHeight) : null;
+
+        int? GetMaximum(double size, int? minimum) => double.IsFinite(size)
+            ? (int)Math.Clamp(Math.Floor(size * scaling), minimum ?? 1, int.MaxValue) : null;
+    }
+
     private void Enqueue(OpenHarmonyChildWindowRequest command)
     {
         if (!_closeRequested && !_disposed)
@@ -449,8 +607,21 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         await previous.ConfigureAwait(false);
         if (_closeRequested || _disposed)
             return;
-        if (await SendAsync(command).ConfigureAwait(false))
+        var accepted = await SendAsync(command).ConfigureAwait(false);
+        if (command.Operation == OpenHarmonyChildWindowOperation.SetState)
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (command.StateRequestVersion == _stageStateRequestVersion)
+                    _requestedWindowState = null;
+            }, DispatcherPriority.Input);
+        if (accepted)
             return;
+        if (IsStage && command.Operation == OpenHarmonyChildWindowOperation.Resize)
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_requestedStageClientSize == command.StageClientSize)
+                    _requestedStageClientSize = null;
+            }, DispatcherPriority.Input);
 
         if (command.Operation is OpenHarmonyChildWindowOperation.Show or OpenHarmonyChildWindowOperation.Hide)
             Dispatcher.UIThread.Post(() => CloseAfterFailure($"Could not {command.Operation.ToString().ToLowerInvariant()} HarmonyOS window {Id}."));

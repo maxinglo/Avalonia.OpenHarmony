@@ -18,6 +18,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     private const long MaximumPixels = 16_777_216;
     private readonly OpenHarmonyHost.PresentFrame _present;
     private readonly Action<string> _reportError;
+    private readonly Func<int>? _getWindowId;
     private readonly TouchDevice _touch = new();
     private readonly IKeyboardDevice _keyboard = AvaloniaLocator.Current.GetRequiredService<IKeyboardDevice>();
     private readonly NativeTextInput? _textInput;
@@ -31,15 +32,21 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     private IInputRoot? _inputRoot;
     private PixelSize _pixelSize;
     private IntPtr _pixels;
+    private bool _disposed;
+    private OpenHarmonyNativeControlHost? _nativeControlHost;
+    private long _nativeControlSurface;
+    private bool _nativeControlInputEnabled = true;
 
     public SurfaceTopLevel(long surface, Compositor compositor, OpenHarmonyHost.PresentFrame present,
         Func<int>? getInputWindowId, Action<string> reportError, OpenHarmonyScreens screens,
         ILauncher? launcher, IStorageProvider? storageProvider, OpenHarmonyEgl.Window? eglWindow)
     {
         Surface = surface;
+        _nativeControlSurface = surface;
         Compositor = compositor;
         _present = present;
         _reportError = reportError;
+        _getWindowId = getInputWindowId;
         _launcher = launcher;
         _storageProvider = storageProvider;
         _screens = screens;
@@ -47,7 +54,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         if (getInputWindowId is not null)
         {
             _textInput = new(this, getInputWindowId, reportError);
-            _cursorController = new(getInputWindowId);
+            _cursorController = new(getInputWindowId, _hardwareDiagnostics);
         }
         Surfaces = eglWindow is null ? [this] : [eglWindow];
     }
@@ -64,7 +71,9 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     public double RenderScaling { get; private set; } = 1;
     public double DesktopScaling => RenderScaling;
     internal PixelPoint ScreenOrigin { get; set; }
-    public IPlatformHandle? Handle => null;
+    public IPlatformHandle? Handle => !_disposed && _getWindowId?.Invoke() is > 0 and var id
+        ? new PlatformHandle(id, "OH_WindowManager window ID")
+        : null;
     public Action<RawInputEventArgs>? Input { get; set; }
     public Action<Rect>? Paint { get; set; }
     public Action<Size, WindowResizeReason>? Resized { get; set; }
@@ -96,7 +105,9 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
             ScalingChanged?.Invoke(RenderScaling);
         }
         Resized?.Invoke(ClientSize, WindowResizeReason.Unspecified);
+        _nativeControlHost?.RefreshAttachments();
         Paint?.Invoke(new Rect(ClientSize));
+        _cursorController?.Invalidate();
     }
 
     public IFramebufferRenderTarget CreateFramebufferRenderTarget() =>
@@ -151,13 +162,22 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     }
     public Point PointToClient(PixelPoint point) => (point - ScreenOrigin).ToPoint(RenderScaling);
     public PixelPoint PointToScreen(Point point) => PixelPoint.FromPoint(point, RenderScaling) + ScreenOrigin;
-    public void SetCursor(ICursorImpl? cursor) =>
-        _cursorController?.Apply((cursor as OpenHarmonyCursor)?.Kind ?? StandardCursorType.Arrow);
+    public void SetCursor(ICursorImpl? cursor) => _cursorController?.SetCursor(cursor);
     public IPopupImpl? CreatePopup() => null;
     public void SetTransparencyLevelHint(IReadOnlyList<WindowTransparencyLevel> levels) { }
     public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant) { }
     public object? TryGetFeature(Type featureType)
     {
+        if (featureType == typeof(INativeControlHostImpl))
+        {
+            if (!_disposed && _nativeControlHost == null && NativeControlApi.Supports(_nativeControlSurface))
+            {
+                _nativeControlHost = new(this, _reportError);
+                _nativeControlHost.SetSurface(_nativeControlSurface);
+                _nativeControlHost.SetInputEnabled(_nativeControlInputEnabled);
+            }
+            return _disposed ? null : _nativeControlHost;
+        }
         if (featureType == typeof(IClipboard))
             return OpenHarmonyClipboard.Instance;
         if (featureType == typeof(ITextInputMethodImpl))
@@ -177,8 +197,22 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         return null;
     }
 
+    internal void SetNativeControlSurface(long token)
+    {
+        _nativeControlSurface = token;
+        _nativeControlHost?.SetSurface(token);
+    }
+
+    internal void SetNativeControlInputEnabled(bool enabled)
+    {
+        _nativeControlInputEnabled = enabled;
+        _nativeControlHost?.SetInputEnabled(enabled);
+    }
+
     public void Dispose()
     {
+        _disposed = true;
+        _nativeControlHost?.Dispose();
         CancelInboundDrag();
         Insets.Dispose();
         _textInput?.Dispose();

@@ -69,6 +69,11 @@ export class PlatformWindow {
   }
 
   start(): void {
+    this.observe(() => {
+      if (!bridge.startDisplayObservation()) {
+        hilog.warn(0x0202, 'AvaloniaOHOS', 'Global display available-area observation is unavailable');
+      }
+    });
     this.useWindowVisibility = !this.observe(() => this.stage.on('windowStageLifecycleEvent', this.stageEvent));
     this.observe(() => this.mainWindow.on('windowEvent', this.windowEvent));
     this.observe(() => this.mainWindow.on('windowRectChange', this.windowMoved));
@@ -86,6 +91,7 @@ export class PlatformWindow {
 
   stop(): void {
     this.insets.stop();
+    bridge.stopDisplayObservation();
     bridge.setLifecycle(HostLifecycle.WindowHidden);
     if (!this.useWindowVisibility) {
       this.observe(() => this.stage.off('windowStageLifecycleEvent', this.stageEvent));

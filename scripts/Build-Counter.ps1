@@ -79,7 +79,7 @@ $counterExports = @(
     'avaoh_set_avoid_area', 'avaoh_set_child_avoid_area', 'avaoh_set_window_inset_properties', 'avaoh_clear_window_insets',
     'avaoh_accessibility_configure', 'avaoh_accessibility_invoke', 'avaoh_accessibility_action',
     'avaoh_update_child_surface', 'avaoh_close_child_surface', 'avaoh_report_child_frame',
-    'avaoh_report_child_event', 'avaoh_request_child_close'
+    'avaoh_report_child_event', 'avaoh_request_child_close', 'avaoh_report_tray_event'
 )
 foreach ($export in $counterExports) {
     if ($symbols -notmatch "\b$export\b") { throw "The NativeAOT application is missing $export." }
@@ -92,6 +92,8 @@ Copy-Item -Path (Join-Path $arktsSource '*') -Destination $entry -Recurse -Force
 $cpp = Join-Path $entry 'cpp'
 $nativeSource = Join-Path $repository 'src/Avalonia.OpenHarmony.Native'
 Copy-Item -Path (Join-Path $nativeSource '*') -Destination $cpp -Force
+Add-Content -LiteralPath (Join-Path $cpp 'CMakeLists.txt') `
+    -Value 'target_sources(avalonia_ohos_bridge PRIVATE counter_native_control.cpp)'
 $moduleProfilePath = Join-Path $hap 'entry/build-profile.json5'
 $moduleProfile = Get-Content -LiteralPath $moduleProfilePath -Raw | ConvertFrom-Json
 $moduleProfile.buildOption.externalNativeOptions.abiFilters = @($Abi)

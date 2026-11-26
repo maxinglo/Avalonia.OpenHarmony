@@ -10,7 +10,13 @@ enum ChildEvent {
   Unfocused,
   Destroyed,
   StageCreated,
-  ModalityReleased
+  ModalityReleased,
+  StageDesktopAvailable,
+  StageDesktopUnavailable,
+  StageNormal,
+  StageMinimized,
+  StageMaximized,
+  StageFullScreen
 }
 
 interface WindowRequest {
@@ -24,6 +30,11 @@ interface WindowRequest {
   modal: boolean;
   activate: boolean;
   decorated: boolean;
+  resizable?: boolean;
+  limits?: window.WindowLimits;
+  state?: string;
+  canMinimize?: boolean;
+  canMaximize?: boolean;
 }
 
 export const childWindowPage: string = 'pages/AvaloniaChildWindow';
@@ -43,9 +54,13 @@ export class ChildWindows {
   private enableInboundDrop: boolean;
   private enableTextDragSource: boolean;
   private windows: Map<number, window.Window> = new Map();
+  private defaultLimits: Map<number, window.WindowLimits> = new Map();
   private closing: Map<number, Promise<boolean>> = new Map();
   private modalWindows: Set<number> = new Set();
   private active: boolean = true;
+  private desktop: boolean = false;
+  private stageStatusDidChange: boolean = false;
+  private stageState: ChildEvent | undefined = undefined;
 
   constructor(stage: window.WindowStage, main: window.Window, enableAccessibility: boolean,
     enableInboundDrop: boolean = false, enableTextDragSource: boolean = false) {
@@ -55,10 +70,12 @@ export class ChildWindows {
     this.enableInboundDrop = enableInboundDrop;
     this.enableTextDragSource = enableTextDragSource;
     bridge.reportChildEvent(0, ChildEvent.StageCreated);
+    this.observeStage();
   }
 
   stop(): void {
     this.active = false;
+    this.unobserveStage();
     for (const key of this.windows.keys()) {
       this.close(key);
     }
@@ -66,8 +83,11 @@ export class ChildWindows {
 
   async execute(argument: string): Promise<string | null> {
     const request = JSON.parse(argument) as WindowRequest;
-    if (!Number.isInteger(request.id) || request.id <= 0) {
+    if (!Number.isInteger(request.id) || request.id < 0) {
       return null;
+    }
+    if (request.id === 0) {
+      return this.active && await this.executeStage(request) ? '' : null;
     }
 
     if (request.operation === 'close') {
@@ -108,10 +128,244 @@ export class ChildWindows {
       case 'setTitle':
         await child.setWindowTitle(request.title ?? '');
         break;
+      case 'setDecorations':
+        child.setWindowDecorVisible(request.decorated);
+        try {
+          if (request.resizable !== undefined) {
+            await this.setResizable(child, request.resizable);
+          }
+        } finally {
+          if (request.limits !== undefined) {
+            await this.setLimits(request.id, child, request.limits);
+          }
+          this.publishFrame(request.id, child);
+        }
+        break;
+      case 'setResizable':
+        if (request.resizable === undefined) {
+          return null;
+        }
+        await this.setResizable(child, request.resizable);
+        break;
+      case 'setLimits':
+        if (request.limits === undefined) {
+          return null;
+        }
+        await this.setLimits(request.id, child, request.limits);
+        break;
       default:
         return null;
     }
     return '';
+  }
+
+  private async executeStage(request: WindowRequest): Promise<boolean> {
+    if (request.operation === 'activate') {
+      return this.activateStage();
+    }
+    if (!this.desktop) {
+      return false;
+    }
+    try {
+      switch (request.operation) {
+        case 'setState':
+          return await this.setStageState(request.state);
+        case 'resize': {
+          if (request.width === undefined || request.height === undefined ||
+            this.main.getWindowStatus() !== window.WindowStatusType.FLOATING) {
+            return false;
+          }
+          await this.main.resizeAsync(request.width, request.height);
+          this.stageRectChanged();
+          return true;
+        }
+        case 'setResizable':
+          if (request.resizable === undefined) {
+            return false;
+          }
+          await this.main.setResizeByDragEnabled(request.resizable);
+          return true;
+        case 'setCaptionButtons':
+          if (request.canMaximize === undefined || request.canMinimize === undefined) {
+            return false;
+          }
+          this.main.setWindowTitleButtonVisible(request.canMaximize, request.canMinimize);
+          return true;
+        default:
+          return false;
+      }
+    } catch (error) {
+      this.warnStage(request.operation, error as BusinessError);
+      return false;
+    }
+  }
+
+  private async setStageState(state: string | undefined): Promise<boolean> {
+    if (state !== 'normal' && state !== 'minimized' && state !== 'maximized' && state !== 'fullscreen') {
+      return false;
+    }
+    try {
+      let current = this.main.getWindowStatus();
+      if (state === 'minimized') {
+        if (current !== window.WindowStatusType.MINIMIZE) {
+          await this.main.minimize();
+        }
+        return true;
+      }
+      if (current === window.WindowStatusType.MINIMIZE) {
+        await this.main.restore();
+        current = this.main.getWindowStatus();
+        if (current === window.WindowStatusType.MINIMIZE) {
+          return false;
+        }
+      }
+      switch (state) {
+        case 'normal':
+          if (current !== window.WindowStatusType.FLOATING) {
+            await this.main.recover();
+          }
+          return true;
+        case 'maximized':
+          if (current !== window.WindowStatusType.MAXIMIZE) {
+            await this.main.maximize(window.MaximizePresentation.EXIT_IMMERSIVE);
+          }
+          return true;
+        case 'fullscreen':
+          if (current !== window.WindowStatusType.FULL_SCREEN) {
+            await this.main.maximize(window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER);
+          }
+          return true;
+        default:
+          return false;
+      }
+    } finally {
+      this.observeStageAction(() => this.stageStatusChanged(this.main.getWindowStatus()));
+    }
+  }
+
+  private stageStatusChanged = (state: window.WindowStatusType): void => {
+    this.stageRectChanged();
+    this.reportStageState(state);
+  };
+
+  private stageVisibilityChanged = (event: window.WindowEventType): void => {
+    if (event === window.WindowEventType.WINDOW_SHOWN || event === window.WindowEventType.WINDOW_HIDDEN) {
+      if (event === window.WindowEventType.WINDOW_SHOWN) {
+        this.observeStageAction(() => this.stageDesktopChanged(this.main.isInFreeWindowMode()));
+      }
+      if (this.desktop) {
+        this.observeStageAction(() => this.stageStatusChanged(this.main.getWindowStatus()));
+      }
+    }
+  };
+
+  private stageDesktopChanged = (enabled: boolean): void => {
+    if (!this.active || this.desktop === enabled) {
+      return;
+    }
+    const event = enabled ? ChildEvent.StageDesktopAvailable : ChildEvent.StageDesktopUnavailable;
+    if (!this.observeStageAction(() => bridge.reportChildEvent(0, event))) {
+      return;
+    }
+    this.desktop = enabled;
+    this.stageState = undefined;
+    if (enabled) {
+      this.observeStageAction(() => this.stageStatusChanged(this.main.getWindowStatus()));
+    }
+  };
+
+  private stageRectChanged = (): void => {
+    if (!this.active || !this.desktop) {
+      return;
+    }
+    this.observeStageAction(() => {
+      const props = this.main.getWindowProperties();
+      const rect = props.windowRect;
+      if (rect.width > 0 && rect.height > 0) {
+        bridge.reportChildFrame(0, props.id, props.displayId ?? 0, rect.left, rect.top, rect.width, rect.height);
+      }
+    });
+  };
+
+  private reportStageState(state: window.WindowStatusType): void {
+    if (!this.active || !this.desktop) {
+      return;
+    }
+    let event: ChildEvent;
+    switch (state) {
+      case window.WindowStatusType.FLOATING:
+      case window.WindowStatusType.SPLIT_SCREEN:
+        event = ChildEvent.StageNormal;
+        break;
+      case window.WindowStatusType.MINIMIZE:
+        event = ChildEvent.StageMinimized;
+        break;
+      case window.WindowStatusType.MAXIMIZE:
+        event = ChildEvent.StageMaximized;
+        break;
+      case window.WindowStatusType.FULL_SCREEN:
+        event = ChildEvent.StageFullScreen;
+        break;
+      default:
+        return;
+    }
+    if (this.stageState !== event && this.observeStageAction(() => bridge.reportChildEvent(0, event))) {
+      this.stageState = event;
+    }
+  }
+
+  private observeStage(): void {
+    this.stageStatusDidChange = this.observeStageAction(() => this.main.on('windowStatusDidChange', this.stageStatusChanged));
+    if (!this.stageStatusDidChange) {
+      this.observeStageAction(() => this.main.on('windowStatusChange', this.stageStatusChanged));
+    }
+    this.observeStageAction(() => this.main.on('windowEvent', this.stageVisibilityChanged));
+    this.observeStageAction(() => this.main.on('windowRectChange', this.stageRectChanged));
+    this.observeStageAction(() => this.main.on('freeWindowModeChange', this.stageDesktopChanged));
+    this.observeStageAction(() => this.stageDesktopChanged(this.main.isInFreeWindowMode()));
+  }
+
+  private unobserveStage(): void {
+    if (this.stageStatusDidChange) {
+      this.observeStageAction(() => this.main.off('windowStatusDidChange', this.stageStatusChanged));
+    } else {
+      this.observeStageAction(() => this.main.off('windowStatusChange', this.stageStatusChanged));
+    }
+    this.observeStageAction(() => this.main.off('windowEvent', this.stageVisibilityChanged));
+    this.observeStageAction(() => this.main.off('windowRectChange', this.stageRectChanged));
+    this.observeStageAction(() => this.main.off('freeWindowModeChange', this.stageDesktopChanged));
+  }
+
+  private observeStageAction(action: () => void): boolean {
+    try {
+      action();
+      return true;
+    } catch (error) {
+      this.warnStage('observe', error as BusinessError);
+      return false;
+    }
+  }
+
+  private warnStage(operation: string, error: BusinessError): void {
+    hilog.warn(0x0202, 'AvaloniaOHOS', 'Stage window %{public}s failed (%{public}d): %{public}s',
+      operation, error.code ?? 0, error.message);
+  }
+
+  private async activateStage(): Promise<boolean> {
+    if (this.main.isFocused()) {
+      return true;
+    }
+    if (!this.main.isWindowShowing() || this.modalWindows.size > 0) {
+      return false;
+    }
+    for (const key of this.windows.keys()) {
+      const child = this.windows.get(key);
+      if (child !== undefined && !this.closing.has(key) && child.isFocused()) {
+        await window.shiftAppWindowFocus(child.getWindowProperties().id, this.main.getWindowProperties().id);
+        return true;
+      }
+    }
+    return false;
   }
 
   private async show(request: WindowRequest, existing?: window.Window): Promise<boolean> {
@@ -177,6 +431,23 @@ export class ChildWindows {
         return false;
       }
       await this.showWindow(child, request.activate);
+      if (!this.active || this.windows.get(key) !== child) {
+        return false;
+      }
+      if (request.limits !== undefined) {
+        try {
+          await this.setLimits(key, child, request.limits);
+        } catch (error) {
+          this.warnClose(key, 'set size limits', error as Error);
+        }
+      }
+      if (request.resizable === false) {
+        try {
+          await this.setResizable(child, false);
+        } catch (error) {
+          this.warnClose(key, 'disable drag resize', error as Error);
+        }
+      }
       this.publishFrame(key, child);
       this.publishEvent(key, child, ChildEvent.Shown);
       return true;
@@ -260,6 +531,39 @@ export class ChildWindows {
   private warnClose(key: number, operation: string, error: Error): void {
     hilog.warn(0x0202, 'AvaloniaOHOS', 'Child window %{public}d %{public}s failed: %{public}s',
       key, operation, error.message);
+  }
+
+  private async setResizable(child: window.Window, resizable: boolean): Promise<void> {
+    if (child.getWindowDecorVisible()) {
+      await child.setResizeByDragEnabled(resizable);
+    } else {
+      await child.enableDrag(resizable);
+    }
+  }
+
+  private async setLimits(key: number, child: window.Window, limits: window.WindowLimits): Promise<void> {
+    let defaults = this.defaultLimits.get(key);
+    if (defaults === undefined) {
+      defaults = child.getWindowLimits();
+      this.defaultLimits.set(key, defaults);
+    }
+    const properties = child.getWindowProperties();
+    const frame = properties.windowRect;
+    const drawable = properties.drawableRect;
+    const horizontal = drawable.width > 0 ? Math.max(0, frame.width - drawable.width) : 0;
+    const vertical = drawable.height > 0 ? Math.max(0, frame.height - drawable.height) : 0;
+    const applied = await child.setWindowLimits({
+      minWidth: this.frameLimit(limits.minWidth, defaults.minWidth, horizontal),
+      minHeight: this.frameLimit(limits.minHeight, defaults.minHeight, vertical),
+      maxWidth: this.frameLimit(limits.maxWidth, defaults.maxWidth, horizontal),
+      maxHeight: this.frameLimit(limits.maxHeight, defaults.maxHeight, vertical)
+    });
+    hilog.info(0x0202, 'AvaloniaOHOS', 'Child window %{public}d native size limits %{public}d x %{public}d to %{public}d x %{public}d',
+      key, applied.minWidth ?? 0, applied.minHeight ?? 0, applied.maxWidth ?? 0, applied.maxHeight ?? 0);
+  }
+
+  private frameLimit(limit: number | undefined, defaultLimit: number | undefined, chrome: number): number | undefined {
+    return limit === undefined ? defaultLimit : Math.min(limit + chrome, 2147483647);
   }
 
   private async createWindow(name: string, options: window.SubWindowOptions): Promise<window.Window> {
@@ -351,6 +655,7 @@ export class ChildWindows {
   private closed(key: number, child: window.Window): void {
     if (this.windows.get(key) === child) {
       this.windows.delete(key);
+      this.defaultLimits.delete(key);
       this.modalWindows.delete(key);
       bridge.reportChildEvent(key, ChildEvent.Destroyed);
     }

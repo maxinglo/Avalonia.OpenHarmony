@@ -1,5 +1,79 @@
 # Platform verification
 
+See the [Avalonia interface matrix](platform-capabilities.md) for the current implementation scope.
+
+## API 26 PC acceptance
+
+Use one x86_64 MateBook Pro emulator throughout the run. Verify `const.ohos.apiversion=26`, `x86_64` in
+`const.product.cpu.abilist`, and `const.product.devicetype=2in1` through HDC. Test the windowed HAP first, then install
+the EGL HAP on the same emulator. Use each run's `Control positions` and the current WindowManager frames for input.
+
+### Desktop integrations
+
+| Interface | Device acceptance |
+| --- | --- |
+| `INativeControlHostImpl` | Click the ArkUI button inside Counter and observe the Avalonia count change. Move it against the viewport edge and compare the visible bounds with the viewport. A click in the clipped area leaves the native count unchanged. Hide, detach, and reattach it and observe native visibility, disposal, and creation. |
+| `ITrayIconImpl` | **Show status bar icon** adds an item to the OS status bar or its overflow. Left-clicking it raises `TrayIcon.Clicked`. **Update status bar icon** changes the icon and hover text. Hiding removes the item, and showing restores the native item. Check the capability query before exercising the controls. |
+| `INativeMenuExporter` | Right-click the Counter item in the system tray. Click **Add one from tray** and a child of **Tray menu options**. Verify command dispatch and updated selection in the reopened native menu. This check exercises `TrayIcon.Menu` export. |
+| `IWindowImpl` | Compare the system frame and Avalonia window state after programmatic maximize, minimize, fullscreen, and normal requests. Exercise the native title bar and restore a minimized stage from the Dock or by reopening Counter. Verify the same window and process survive, with the previous count and floating frame preserved. |
+
+On the PC image, the status bar overflow is opened by `DockStatusBarComponent_arrowbutton` in the desktop
+layout. Take a fresh layout after opening it to locate the test icon. Move and click in one HDC command, for
+example `hdc shell uinput -M -m X Y -i 150 -c 1` for right-click. The system menu is drawn in a separate window.
+
+The windowed Counter embedded a real ArkUI button in the same process as Avalonia. The button's original width
+was 320 px. After moving it, the system reported a 189 px visible region. Only clicks inside that region incremented
+the native counter. Showing it again preserved its count. Detaching disposed the native node and reattaching
+created a new node at count 0. The Avalonia counter also accepted input.
+
+The capability query returned true. Counter received a left click on the system item and a root menu command from
+the native right-click window. Two native submenu selections toggled the selected property on and off. The system
+accepted icon and menu updates, displayed `Avalonia Counter (1)` on hover, and removed and restored the item on
+hide and show. The independent ArkTS probe exercised the same native left and right callback routes before Counter.
+
+WindowManager reported 3120 × 1955 px for the maximized stage and 3120 × 2080 px for fullscreen. A width-only
+resize changed the floating frame from 2090 × 1394 px to 1178 × 1394 px. Recovering from fullscreen returned to
+the exact 1178 × 1394 px frame at (515, 281) after the system transition settled. Counter toggled the native
+maximize and minimize title buttons. The programmatic and native-button minimize paths both preserved the native
+window and Avalonia owner. Reopening the ability and restoring from the Dock returned to the same native frame.
+The main counter continued from 1 to 2 in the same process.
+
+After restoring the stage, the original modal flow still blocked the owner, returned 1 and let the owner advance
+to count 3 after closing. The embedded EGL variant received NativeVSync, presented a 2090 × 1213 frame and
+accepted clicks in both the Avalonia and ArkUI counters. The Windows smoke and managed lifecycle, child insets,
+text drag, tray, and ArkTS close probes also passed.
+
+### Rendering and owned-window regression
+
+| Check | Pass condition |
+| --- | --- |
+| Software, VSync and dispatcher | The `-Windowed` HAP receives the first NativeVSync callback, presents a software frame, and increments the main counter after a click. A local callback probe exercises timeout and unavailable-library fallback. |
+| Native owned windows | A modeless child has its own WindowManager frame. Its counter responds, **Move child** changes its position, **Resize child** changes its size, and closing it restores the owner. |
+| Modality | The modal child blocks a click on the owner, accepts one child counter click, and returns 1. The same owner accepts another click after the dialog closes. |
+| Native ID and sizing | **Open constrained window** reports distinct stage and child WindowManager IDs that match the system. Compare the reported limits with the actual native window size. Exercise the edge-resize toggle and title bar in the window modes that expose them. |
+| Pointer routing | Hover the bitmap, hidden, editor and default cursor targets with mouse input. Look for `32x24 hotspot=(7,5)`, `16x16`, `Text` and `Default` in the native result messages. For visual verification, compare the rendered point against the hotspot on a visible system pointer. |
+| EGL and lifecycle | The `-UseEgl` HAP presents an EGL frame. Minimize using the native PC title bar and reopen Counter. The same process reports background and foreground events and increments from 1 to 2. |
+
+On MateBook Pro, both HAPs received NativeVSync and presented a 2090 × 1213 frame. The windowed run moved the
+modeless child by 48 × 24 px and resized its native frame from 798 × 570 to 950 × 570 px. The modal returned 1 and
+the owner accepted input again. The stage and child handle IDs matched WindowManager. **Focus owner** transferred
+WindowManager focus from the still-open constrained child to the stage.
+
+With the title bar visible, the constrained child stayed at 798 × 602 px with edge resize disabled. The same
+drag reached the system limit of 987 px wide with edge resize enabled. Hiding and restoring the title bar
+changed the native frame height limits by 70 px. Counter reported one 3120 × 2080 display, a 3120 × 1955 work area
+and 1.90 scale. The native cursor calls accepted the bitmap, transparent bitmap, text and default cursor.
+The EGL run retained its process and count through native minimization and restoration. On this image the native
+modal keyboard-avoidance request was denied, and the dialog remained usable.
+
+Use `dotnet run --project tests/LifecycleProbe` for both window-focus event orders and synthetic two-display snapshots.
+The [cursor probe](hardware-input.md#verification) checks pixel format, alpha, exact hotspot and native resource release.
+The [text drag probe](text-drag-source.md#verification) checks ordered records and payload bounds. PC single-display
+results cover the active display only. Native multi-monitor hot-plug and cross-application delivery of several text records
+require their own device checks.
+
+## Huawei_TripleFold checks
+
 The Counter sample logs under `AvaloniaOHOS`. Its text field logs only lengths and decreases. It reports a fixed
 success message when it receives the sample clipboard value. The log also reports control positions and display scale.
 Input diagnostics identify IME attachment, keyboard status, commits and deletion requests. Hardware-key diagnostics

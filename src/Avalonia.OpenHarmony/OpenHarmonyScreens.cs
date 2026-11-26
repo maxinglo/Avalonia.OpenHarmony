@@ -104,7 +104,8 @@ internal sealed class OpenHarmonyScreens : IScreenImpl
     public void NotifyChanged() => Changed?.Invoke();
 
     public Screen? ScreenFromWindow(IWindowBaseImpl window) => window is OpenHarmonyChildWindow child
-        ? ScreenFromRect(new PixelRect(child.Position, child.Surface.PixelSize)) ?? HostScreen
+        ? ScreenFromRect(new PixelRect(child.Position,
+            PixelSize.FromSize(child.FrameSize ?? child.ClientSize, child.DesktopScaling))) ?? HostScreen
         : null;
     public Screen? ScreenFromTopLevel(ITopLevelImpl topLevel) => topLevel switch
     {

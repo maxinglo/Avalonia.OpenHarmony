@@ -42,6 +42,10 @@ internal sealed partial class SurfaceTopLevel
         if (type != RawPointerEventType.LeaveWindow)
             _pressedMouseButtons = buttons;
         Input?.Invoke(new RawPointerEventArgs(_mouse, timestamp, root, type, position, modifiers));
+        if (type == RawPointerEventType.LeaveWindow)
+            _cursorController?.Invalidate();
+        else
+            _cursorController?.RefreshCustomCursor();
     }
 
     internal void CancelHardwarePointer()
@@ -54,6 +58,7 @@ internal sealed partial class SurfaceTopLevel
             Input?.Invoke(new RawPointerEventArgs(_mouse, now, root, RawPointerEventType.LeaveWindow,
                 default(Point), RawInputModifiers.None));
         }
+        _cursorController?.Invalidate();
         _pressedMouseButtons = RawInputModifiers.None;
     }
 

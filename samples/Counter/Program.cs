@@ -28,6 +28,7 @@ public static partial class Program
 #endif
 #if OHOS
         builder.With(new OpenHarmonyTextDragOptions());
+        builder.With(TrayOptions);
 #endif
         return builder;
     }

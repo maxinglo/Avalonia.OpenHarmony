@@ -1,0 +1,23 @@
+# Avalonia platform interfaces
+
+This matrix describes the API 26 backend for Avalonia 12.1.6. The default host embeds one XComponent.
+The optional windowed host adds a stage-owned Avalonia window and native owned windows.
+
+| Avalonia interface | Implementation | Scope |
+| --- | --- | --- |
+| `IRenderTimer` | HarmonyOS NativeVSync drives the shared Avalonia render loop when available. | The managed timer drives rendering when the native clock is missing, fails to request a frame or stops delivering frames. [NativeVSync API](https://developer.huawei.com/consumer/en/doc/harmonyos-references-V14/_native_vsync-V14/) |
+| `IDispatcherImpl` | Avalonia's `ManagedDispatcherImpl` provides the UI dispatcher on the host's dedicated thread. | Native and ArkTS callbacks marshal work to this dispatcher. ArkUI work stays on the ArkUI thread. |
+| `IPlatformGraphics` | Optional Skia EGL context and window surface for the embedded view. | Software rendering is the default and the fallback. The windowed host and native children use software. |
+| `IPlatformSettings` | Reads the initial system light or dark mode and updates it from HarmonyOS configuration changes. | Avalonia defaults supply interaction metrics. System accents and other system appearance values are pending. |
+| `ICursorFactory` | Standard cursor styles and custom bitmap cursors with a pixel hotspot, applied per HarmonyOS window. | Styles use the closest available system shape. Custom images and hidden cursors depend on native input support. |
+| `IPlatformIconLoader` | Loads Avalonia window icon data from a file, stream or bitmap. | HAP resources still supply the app icon. The window adapter has no dynamic title-bar icon setter. |
+| `INativeControlHostImpl` | Embeds ArkUI NDK controls through `NativeControlHost` and `OpenHarmonyNativeControlHandle`. | PC Counter exercised real clicks, rectangular clipping and hit testing, visibility, disposal, and recreation. ArkUI controls occupy the layer above the Avalonia surface. [Native ArkUI controls](native-controls.md) |
+| `IPlatformHandle` | A native HarmonyOS WindowManager ID is available when the corresponding window is known. | The `OH_WindowManager window ID` descriptor identifies an integer ID for WindowManager APIs. The XComponent surface token and graphics pointer have separate lifetimes. |
+| `IPlatformDragSource` | Opt-in touch drag for plain-text records with Copy semantics. The separate incoming path also accepts read-only files. | Desktop mouse initiation, outbound file authorization and Move or Link are pending. [Drag integration](drag-and-drop.md) and [outbound text](text-drag-source.md). |
+| `IActivatableLifetime` | Application foreground and background events with `ActivationKind.Background`. | Window focus and application activation are tracked independently. `TryEnterBackground` and `TryLeaveBackground` return false. |
+| `IScreenImpl` | Enumerates native displays with bounds, scale, orientation, primary display and working area. | Tracks display and working-area changes, and assigns windows using native geometry. When the system omits the working area, it uses display bounds. [Display Manager API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/capi-oh-display-manager-h/) |
+| `IWindowImpl` | Optional stage window and direct native owned and modal windows. Freeform stage supports native minimize, maximize, fullscreen, floating resize and caption controls. | PC Counter verified application and native title-bar state changes, exact floating frame recovery, Dock restore and retained state in the same window. Independent top levels and nested owners are pending. [Owned windows](owned-windows.md) |
+| `ITrayIconImpl` | Opt-in `TrayIcon` through Huawei's Desktop Extension Kit. | PC Counter exercised OS status-bar registration, left click, icon and hover-tip updates, hide, and re-show. The system provides one item per app and checks device support. [Status-bar integration](status-bar.md) |
+| `INativeMenuExporter` | Exports `TrayIcon.Menu` to the native status-bar context menu. | PC Counter dispatched a native root item and submenu item and toggled selection through an updated menu. Visible, enabled entries support groups and one submenu level, with up to 20 root entries and 20 entries per submenu. The current API 26 SDK exposes this system menu for the status-bar item. Window menus can use `NativeMenuBar` in Avalonia. [Status-bar API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/statusbar-extension-manager) |
+
+See the [platform verification matrix](platform-validation.md) for the devices and probes used to validate these interfaces.
