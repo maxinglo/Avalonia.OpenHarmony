@@ -427,6 +427,7 @@ public sealed partial class OpenHarmonyHost
                 OpenHarmonyChildWindowOperation.SetLimits => "setLimits",
                 OpenHarmonyChildWindowOperation.SetState => "setState",
                 OpenHarmonyChildWindowOperation.SetCaptionButtons => "setCaptionButtons",
+                OpenHarmonyChildWindowOperation.SetExtendedTitleBar => "setExtendedTitleBar",
                 _ => throw new ArgumentOutOfRangeException(nameof(request))
             });
             if (request.Position is { } position)
@@ -451,6 +452,13 @@ public sealed partial class OpenHarmonyHost
             {
                 json.WriteBoolean("canMinimize", request.CanMinimize);
                 json.WriteBoolean("canMaximize", request.CanMaximize);
+            }
+            if (request.Operation == OpenHarmonyChildWindowOperation.SetExtendedTitleBar)
+            {
+                json.WriteBoolean("extendTitleBar", request.ExtendTitleBar);
+                json.WriteNumber("titleBarHeight", request.TitleBarHeight);
+                if (request.TitleBarTheme is { } theme)
+                    json.WriteString("titleBarTheme", theme == PlatformThemeVariant.Dark ? "dark" : "light");
             }
             if (request.Limits is { } limits)
             {

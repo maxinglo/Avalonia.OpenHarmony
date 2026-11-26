@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.OpenHarmony;
 using Avalonia.Platform;
+using Avalonia.Styling;
 using Avalonia.Threading;
 
 var errors = new ConcurrentQueue<string>();
@@ -65,6 +66,35 @@ await Dispatcher.UIThread.InvokeAsync(async () =>
     Check(ReferenceEquals(window, TopLevel.GetTopLevel(ProbeApp.Main)) && window.IsActive && window.WindowState == WindowState.Normal &&
         window.Position == floatingFrame.Position && window.FrameSize == new Size(810, 640),
         "Native restoration observes the same owner and exact floating frame after surface replacement");
+
+    window.ExtendClientAreaTitleBarHeightHint = 46;
+    window.ExtendClientAreaToDecorationsHint = true;
+    await Flush();
+    Check(requests.TryDequeue(out var extend) && extend.GetProperty("operation").GetString() == "setExtendedTitleBar" &&
+        extend.GetProperty("extendTitleBar").GetBoolean() && extend.GetProperty("titleBarHeight").GetDouble() == 46 &&
+        !window.IsExtendedIntoWindowDecorations,
+        "Title bar extension requests use the height hint and wait for the native layout");
+    host.ReportTitleBar(true, 46, 140);
+    await Flush();
+    Check(window.IsExtendedIntoWindowDecorations && window.WindowDecorationMargin == new Thickness(0, 46, 140, 0),
+        "The extended title exposes the native reservation through Avalonia");
+    host.ReportTitleBar(true, 46, 92);
+    await Flush();
+    Check(window.IsExtendedIntoWindowDecorations && window.WindowDecorationMargin.Right == 92,
+        "The native button reservation can change without toggling extension");
+    window.RequestedThemeVariant = ThemeVariant.Dark;
+    await Flush();
+    Check(requests.TryDequeue(out var darkTitle) && darkTitle.GetProperty("extendTitleBar").GetBoolean() &&
+        darkTitle.GetProperty("titleBarTheme").GetString() == "dark",
+        "Changing the Avalonia theme updates the native caption theme");
+    window.ExtendClientAreaToDecorationsHint = false;
+    await Flush();
+    Check(requests.TryDequeue(out var restore) && !restore.GetProperty("extendTitleBar").GetBoolean(),
+        "Clearing the hint requests the ordinary native title bar");
+    host.ReportTitleBar(false, 0, 0);
+    await Flush();
+    Check(!window.IsExtendedIntoWindowDecorations && window.WindowDecorationMargin == default,
+        "Restoring the ordinary title resets decoration margins");
 
     var lifetime = (IActivatableLifetime)Application.Current!.ApplicationLifetime!;
     var activated = 0;

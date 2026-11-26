@@ -1,6 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml.MarkupExtensions;
+using Avalonia.Media;
 
 namespace Counter;
 
@@ -56,6 +59,11 @@ public sealed partial class CounterApp
             window.CanMinimize = !window.CanMinimize;
             window.CanMaximize = window.CanMinimize;
             Trace($"Stage caption policy requested: minimize {window.CanMinimize}, maximize {window.CanMaximize}");
+        });
+        Add("Toggle title bar extension", window =>
+        {
+            window.ExtendClientAreaTitleBarHeightHint = 44;
+            window.ExtendClientAreaToDecorationsHint = !window.ExtendClientAreaToDecorationsHint;
         });
 
         Window? owner = null;
@@ -127,6 +135,68 @@ public sealed partial class CounterApp
             Trace($"Stage {change}: owner {System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(window)}, " +
                 $"native {window.TryGetPlatformHandle()?.Handle}, {window.WindowState}, " +
                 $"position {window.Position}, frame {window.FrameSize}, client {window.ClientSize}");
+        }
+    }
+
+    private static Control WithCustomTitleBar(Control content)
+    {
+        var action = new Button { Content = "Title action", VerticalAlignment = VerticalAlignment.Center };
+        var clicks = 0;
+        action.Click += (_, _) => Trace($"Title action clicked: {++clicks}");
+        var drag = new Border
+        {
+            Background = Brushes.Transparent,
+            Padding = new Thickness(12, 0),
+            Child = new TextBlock { Text = "Avalonia title", VerticalAlignment = VerticalAlignment.Center }
+        };
+        drag.PointerPressed += (_, args) =>
+        {
+            if (args.GetCurrentPoint(drag).Properties.IsLeftButtonPressed && TopLevel.GetTopLevel(drag) is Window window)
+            {
+                window.BeginMoveDrag(args);
+                args.Handled = true;
+            }
+        };
+        DockPanel.SetDock(action, Dock.Left);
+        var header = new Border
+        {
+            IsVisible = false,
+            Child = new DockPanel { Children = { action, drag } }
+        };
+        header[!Border.BackgroundProperty] = new DynamicResourceExtension("ThemeBackgroundBrush");
+        DockPanel.SetDock(header, Dock.Top);
+        ObserveTopLevel(header, ("Title drag", drag), ("Title action", action));
+        Window? owner = null;
+        header.AttachedToVisualTree += (_, _) =>
+        {
+            if (TopLevel.GetTopLevel(header) is not Window window)
+                return;
+            owner = window;
+            window.PropertyChanged += OnWindowPropertyChanged;
+            Update(window);
+        };
+        header.DetachedFromVisualTree += (_, _) =>
+        {
+            if (owner is { } window)
+                window.PropertyChanged -= OnWindowPropertyChanged;
+            owner = null;
+        };
+        return new DockPanel { Children = { header, content } };
+
+        void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs args)
+        {
+            if (owner is { } window && (args.Property == Window.IsExtendedIntoWindowDecorationsProperty ||
+                args.Property == Window.WindowDecorationMarginProperty))
+                Update(window);
+        }
+
+        void Update(Window window)
+        {
+            var margin = window.WindowDecorationMargin;
+            header.IsVisible = window.IsExtendedIntoWindowDecorations;
+            header.Height = margin.Top;
+            header.Padding = new Thickness(12, 0, margin.Right, 0);
+            Trace($"Title bar extension: {header.IsVisible}, height {margin.Top}, right {margin.Right}");
         }
     }
 

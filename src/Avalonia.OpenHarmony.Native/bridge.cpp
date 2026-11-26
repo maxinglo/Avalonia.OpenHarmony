@@ -42,6 +42,8 @@ struct AppLibrary {
         closeChildSurface = reinterpret_cast<decltype(closeChildSurface)>(dlsym(handle, "avaoh_close_child_surface"));
         reportChildFrame = reinterpret_cast<decltype(reportChildFrame)>(dlsym(handle, "avaoh_report_child_frame"));
         reportChildEvent = reinterpret_cast<decltype(reportChildEvent)>(dlsym(handle, "avaoh_report_child_event"));
+        reportTitleBar = reinterpret_cast<decltype(reportTitleBar)>(dlsym(handle, "avaoh_report_title_bar"));
+        titleBarPress = reinterpret_cast<decltype(titleBarPress)>(dlsym(handle, "avaoh_title_bar_press"));
         reportTrayEvent = reinterpret_cast<decltype(reportTrayEvent)>(dlsym(handle, "avaoh_report_tray_event"));
         requestChildClose = reinterpret_cast<decltype(requestChildClose)>(dlsym(handle, "avaoh_request_child_close"));
         touch = reinterpret_cast<decltype(touch)>(dlsym(handle, "avaoh_touch"));
@@ -74,6 +76,8 @@ struct AppLibrary {
     void (*closeChildSurface)(int32_t, int64_t) = nullptr;
     void (*reportChildFrame)(int32_t, int32_t, int64_t, int32_t, int32_t, int32_t, int32_t) = nullptr;
     void (*reportChildEvent)(int32_t, int32_t) = nullptr;
+    void (*reportTitleBar)(int32_t, double, double) = nullptr;
+    int32_t (*titleBarPress)(int64_t, int32_t, int64_t, double, double, int32_t) = nullptr;
     void (*reportTrayEvent)(int64_t, const char*, int32_t) = nullptr;
     int32_t (*requestChildClose)(int32_t) = nullptr;
     void (*touch)(int64_t, int64_t, int32_t, double, double) = nullptr;
@@ -657,6 +661,55 @@ napi_value ConfigureAccessibility(napi_env env, napi_callback_info info)
     return value;
 }
 
+napi_value SupportsTitleBar(napi_env env, napi_callback_info)
+{
+    napi_value result;
+    napi_get_boolean(env, App().reportTitleBar != nullptr && App().titleBarPress != nullptr, &result);
+    return result;
+}
+
+napi_value ReportTitleBar(napi_env env, napi_callback_info info)
+{
+    size_t count = 3;
+    napi_value args[3];
+    bool extended;
+    double height, buttonInset;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 3 ||
+        napi_get_value_bool(env, args[0], &extended) != napi_ok ||
+        napi_get_value_double(env, args[1], &height) != napi_ok || !std::isfinite(height) || height < 0 ||
+        napi_get_value_double(env, args[2], &buttonInset) != napi_ok || !std::isfinite(buttonInset) || buttonInset < 0)
+        return Error(env, "Invalid title bar geometry.");
+    if (auto callback = App().reportTitleBar)
+        callback(extended ? 1 : 0, height, buttonInset);
+    return nullptr;
+}
+
+napi_value TitleBarPress(napi_env env, napi_callback_info info)
+{
+    size_t count = 6;
+    napi_value args[6];
+    uint64_t surfaceId;
+    bool mouse;
+    int64_t contact;
+    int32_t modifiers;
+    double x, y;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 6 ||
+        !ParseSurfaceId(env, args[0], surfaceId) || napi_get_value_bool(env, args[1], &mouse) != napi_ok ||
+        napi_get_value_int64(env, args[2], &contact) != napi_ok ||
+        napi_get_value_double(env, args[3], &x) != napi_ok || !std::isfinite(x) ||
+        napi_get_value_double(env, args[4], &y) != napi_ok || !std::isfinite(y) ||
+        napi_get_value_int32(env, args[5], &modifiers) != napi_ok)
+        return Error(env, "Invalid title bar press.");
+    const auto token = SurfaceToken(surfaceId);
+    const auto callback = App().titleBarPress;
+    int32_t route = 0;
+    if (token != 0 && callback != nullptr)
+        route = callback(token, mouse ? 1 : 0, contact, x, y, modifiers) ? 2 : 1;
+    napi_value result;
+    napi_create_int32(env, route, &result);
+    return result;
+}
+
 napi_value Touch(napi_env env, napi_callback_info info)
 {
     size_t count = 5;
@@ -840,6 +893,9 @@ napi_value Init(napi_env env, napi_value exports)
         {"clearWindowInsets", nullptr, ClearWindowInsets, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportChildFrame", nullptr, ReportChildFrame, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportChildEvent", nullptr, ReportChildEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"supportsTitleBar", nullptr, SupportsTitleBar, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"reportTitleBar", nullptr, ReportTitleBar, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"titleBarPress", nullptr, TitleBarPress, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportTrayEvent", nullptr, ReportTrayEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestChildClose", nullptr, RequestChildClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestBack", nullptr, RequestBack, nullptr, nullptr, nullptr, napi_default, nullptr},

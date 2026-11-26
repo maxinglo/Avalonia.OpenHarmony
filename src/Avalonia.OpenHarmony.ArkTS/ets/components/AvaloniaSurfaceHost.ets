@@ -5,7 +5,7 @@ import { unifiedDataChannel } from '@kit.ArkData';
 import bridge from 'libavalonia_ohos_bridge.so';
 import { AvaloniaDropReceiver, avaloniaDropTypes } from './AvaloniaDropReceiver';
 import { AvaloniaTextDragSource } from './AvaloniaTextDragSource';
-import { childWindowName } from '../entryability/ChildWindows';
+import { childWindowName, handleStageTitleBarPress } from '../entryability/ChildWindows';
 import { WindowInsetsObserver } from '../entryability/WindowInsets';
 
 class SurfaceController extends XComponentController {
@@ -22,6 +22,9 @@ class SurfaceController extends XComponentController {
   private mouseX: number = 0;
   private mouseY: number = 0;
   private metaPressed: boolean = false;
+  private mousePressFromTouch: boolean = false;
+  private movingWithMouse: boolean = false;
+  private movingTouches: Set<number> = new Set();
   readScale: () => number = (): number => 1;
   geometryChanged: () => void = (): void => {};
 
@@ -69,7 +72,22 @@ class SurfaceController extends XComponentController {
   }
 
   onTouch(event: TouchEvent): void {
-    if (!this.surfaceId || event.source === SourceType.Mouse) {
+    if (!this.surfaceId) {
+      return;
+    }
+    if (event.source === SourceType.Mouse) {
+      if (event.type === TouchType.Down) {
+        this.mousePressFromTouch = false;
+        this.movingWithMouse = false;
+        if (this.windowKey === 0 && event.changedTouches.length > 0) {
+          // ArkUI emits onTouch before onMouse for a left press. Only onTouch can start a native window drag.
+          const point = event.changedTouches[0];
+          const route = handleStageTitleBarPress(this.surfaceId, true, 0, point.x * this.scale,
+            point.y * this.scale, this.pointerModifiers(event) | this.buttonMask(1), this.scale);
+          this.mousePressFromTouch = route !== 0;
+          this.movingWithMouse = route === 2;
+        }
+      }
       return;
     }
     let phase: number;
@@ -91,12 +109,34 @@ class SurfaceController extends XComponentController {
     }
     for (const point of event.changedTouches) {
       const contact = this.textDragSource?.contact(point.id, phase) ?? point.id;
-      bridge.touch(this.surfaceId, contact, phase, point.x * this.scale, point.y * this.scale);
+      const x = point.x * this.scale;
+      const y = point.y * this.scale;
+      if (phase === 0) {
+        this.movingTouches.delete(point.id);
+        if (this.windowKey === 0) {
+          const route = handleStageTitleBarPress(this.surfaceId, false, contact, x, y, 0, this.scale);
+          if (route === 2) {
+            this.movingTouches.add(point.id);
+            this.textDragSource?.contact(point.id, 3);
+          }
+          if (route !== 0) {
+            continue;
+          }
+        }
+      }
+      if (!this.movingTouches.has(point.id)) {
+        bridge.touch(this.surfaceId, contact, phase, x, y);
+      } else if (phase === 2 || phase === 3) {
+        this.movingTouches.delete(point.id);
+      }
     }
     if (phase === 3 && this.textDragSource !== undefined) {
       for (const contact of this.textDragSource.cancelContacts()) {
         bridge.touch(this.surfaceId, contact, phase, 0, 0);
       }
+    }
+    if (phase === 3) {
+      this.movingTouches.clear();
     }
   }
 
@@ -151,6 +191,16 @@ class SurfaceController extends XComponentController {
     }
     this.mouseX = event.x * this.scale;
     this.mouseY = event.y * this.scale;
+    if (phase === 1 && button === 1 && this.mousePressFromTouch) {
+      this.mousePressFromTouch = false;
+      return;
+    }
+    if (this.movingWithMouse && (phase === 0 || button === 1)) {
+      if (phase === 2) {
+        this.movingWithMouse = false;
+      }
+      return;
+    }
     bridge.pointer(this.surfaceId, phase, button, this.mouseX, this.mouseY, 0, 0, this.pointerModifiers(event));
   }
 
@@ -203,6 +253,9 @@ class SurfaceController extends XComponentController {
     this.mouseX = 0;
     this.mouseY = 0;
     this.metaPressed = false;
+    this.mousePressFromTouch = false;
+    this.movingWithMouse = false;
+    this.movingTouches.clear();
   }
 }
 

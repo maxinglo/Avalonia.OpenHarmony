@@ -10,9 +10,14 @@ const calls = [];
 const events = [];
 let rejectStageEvent;
 const focusTransfers = [];
+const titleBarLayouts = [];
+const titleBarPresses = [];
+let supportsTitleBar = false;
+let titleBarPressRoute = 1;
 const nativeTypes = { WINDOW_SHOWN: 1, WINDOW_HIDDEN: 4, WINDOW_DESTROYED: 5 };
 const statuses = { FULL_SCREEN: 1, MAXIMIZE: 2, MINIMIZE: 3, FLOATING: 4 };
 const presentations = { EXIT_IMMERSIVE: 1, ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER: 3 };
+const colors = { COLOR_MODE_NOT_SET: -1, COLOR_MODE_DARK: 0, COLOR_MODE_LIGHT: 1 };
 const missing = Object.assign(new Error('no window'), { code: 1300002 });
 const window = {
   ModalityType: { WINDOW_MODALITY: 0 },
@@ -37,9 +42,16 @@ const bridge = {
     events.push([key, type]);
   },
   reportChildFrame: () => {},
+  supportsTitleBar: () => supportsTitleBar,
+  reportTitleBar: (...values) => titleBarLayouts.push(values),
+  titleBarPress(...values) {
+    titleBarPresses.push(values);
+    return titleBarPressRoute;
+  },
   requestChildClose: async () => false
 };
 const dependencies = {
+  '@kit.AbilityKit': { ConfigurationConstant: { ColorMode: colors } },
   '@kit.ArkUI': { window },
   '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
   'libavalonia_ohos_bridge.so': { default: bridge }
@@ -54,6 +66,7 @@ vm.runInNewContext(compiled.outputText, {
   LocalStorage: class { setOrCreate() {} }
 });
 const ChildWindows = mod.exports.ChildWindows;
+const handleTitleBarPress = mod.exports.handleStageTitleBarPress;
 const rect = { left: 0, top: 0, width: 800, height: 600 };
 
 class NativeWindow {
@@ -129,6 +142,10 @@ const main = {
   focused: true,
   desktop: false,
   status: statuses.FLOATING,
+  decorated: true,
+  decorButtonStyle: { spacingBetweenButtons: 20 },
+  titleButtonRect: { right: 0, top: 4, width: 140, height: 28 },
+  moveCount: 0,
   listeners: new Map(),
   getWindowProperties: () => ({ id: 70, windowRect: rect, drawableRect: { ...rect, width: 790, height: 560 } }),
   on(type, callback) { this.listeners.set(type, callback); },
@@ -142,6 +159,16 @@ const main = {
   async resizeAsync(width, height) { this.resize = [width, height]; },
   async setResizeByDragEnabled(enabled) { this.dragResize = enabled; },
   setWindowTitleButtonVisible(canMaximize, canMinimize) { this.captionButtons = [canMaximize, canMinimize]; },
+  getWindowDecorHeight() {
+    assert.equal(this.decorated, true);
+    return 37;
+  },
+  getWindowDecorVisible() { return this.decorated; },
+  setWindowDecorVisible(visible) { this.decorated = visible; },
+  getTitleButtonRect() { return this.titleButtonRect; },
+  getDecorButtonStyle() { return { ...this.decorButtonStyle }; },
+  setDecorButtonStyle(style) { this.decorButtonStyle = style; },
+  async startMoving() { this.moveCount++; },
   async maximize(presentation) {
     this.presentation = presentation;
     this.reportStatus(presentation === presentations.EXIT_IMMERSIVE ? statuses.MAXIMIZE : statuses.FULL_SCREEN);
@@ -198,6 +225,41 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   assert.deepEqual(events.at(-1), [0, 11]);
   main.reportStatus(statuses.FLOATING);
   assert.deepEqual(events.at(-1), [0, 9]);
+
+  const extendTitleBar = (enabled, height = -1, theme) =>
+    send(0, 'setExtendedTitleBar', false, { extendTitleBar: enabled, titleBarHeight: height, titleBarTheme: theme });
+  assert.equal(await extendTitleBar(true), null);
+  assert.equal(main.decorated, true);
+  supportsTitleBar = true;
+  assert.equal(await extendTitleBar(true), '');
+  assert.equal(main.decorated, false);
+  assert.deepEqual(titleBarLayouts.at(-1), [true, 37, 140]);
+  assert.equal(await extendTitleBar(true, 46), '');
+  assert.deepEqual(titleBarLayouts.at(-1), [true, 46, 140]);
+  main.titleButtonRect = { right: 0, top: 4, width: 92, height: 28 };
+  main.listeners.get('windowTitleButtonRectChange')(main.titleButtonRect);
+  assert.deepEqual(titleBarLayouts.at(-1), [true, 46, 92]);
+  assert.equal(handleTitleBarPress('1', false, -2, 10, 12, 0, 2), 1);
+  assert.deepEqual(titleBarPresses.at(-1), ['1', false, -2, 10, 12, 0]);
+  assert.equal(main.moveCount, 0);
+  titleBarPressRoute = 2;
+  assert.equal(handleTitleBarPress('1', true, 0, 10, 92, 16, 2), 0);
+  assert.equal(handleTitleBarPress('1', true, 0, 10, 12, 16, 2), 2);
+  assert.equal(main.moveCount, 1);
+  assert.equal(await extendTitleBar(true, 46, 'dark'), '');
+  assert.deepEqual(main.decorButtonStyle, { spacingBetweenButtons: 20, colorMode: colors.COLOR_MODE_DARK });
+  assert.equal(await extendTitleBar(true, 46, 'light'), '');
+  assert.equal(main.decorButtonStyle.colorMode, colors.COLOR_MODE_LIGHT);
+  main.reportStatus(statuses.MAXIMIZE);
+  assert.equal(handleTitleBarPress('1', true, 0, 10, 12, 16, 2), 0);
+  main.reportStatus(statuses.FLOATING);
+  assert.equal(await extendTitleBar(false), '');
+  assert.equal(main.decorated, true);
+  assert.equal(main.decorButtonStyle.colorMode, colors.COLOR_MODE_NOT_SET);
+  assert.equal(main.listeners.has('windowTitleButtonRectChange'), false);
+  assert.deepEqual(titleBarLayouts.at(-1), [false, 0, 0]);
+  calls.push('Stage reports title height and native button geometry, starts only requested floating drags, and restores native decorations');
+
   main.desktop = false;
   main.listeners.get('freeWindowModeChange')(main.desktop);
   assert.deepEqual(events.at(-1), [0, 8]);

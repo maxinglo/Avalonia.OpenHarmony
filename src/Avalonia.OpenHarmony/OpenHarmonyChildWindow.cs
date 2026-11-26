@@ -35,6 +35,11 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     private bool _stageDesktop;
     private bool _canMinimize = true;
     private bool _canMaximize = true;
+    private bool _extendTitleBar;
+    private double _titleBarHeight = -1;
+    private PlatformThemeVariant? _titleBarTheme;
+    private bool _dispatchingTitleBarPress;
+    private bool _moveRequested;
     private WindowState _windowState;
     private WindowState? _requestedWindowState;
     private int _stageStateRequestVersion;
@@ -113,10 +118,10 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     public Func<WindowCloseReason, bool>? Closing { get; set; }
     public Action<WindowState>? WindowStateChanged { get; set; }
     public Action<bool>? ExtendClientAreaToDecorationsChanged { get; set; }
-    public bool IsClientAreaExtendedToDecorations => false;
+    public bool IsClientAreaExtendedToDecorations { get; private set; }
     public bool NeedsManagedDecorations => false;
     public PlatformRequestedDrawnDecoration RequestedDrawnDecorations => 0;
-    public Thickness ExtendedMargins => default;
+    public Thickness ExtendedMargins { get; private set; }
     public Thickness OffScreenMargin => default;
     public PlatformAllowedWindowActions AllowedWindowActions => !_stageDesktop ? PlatformAllowedWindowActions.None
         : PlatformAllowedWindowActions.Fullscreen
@@ -332,9 +337,78 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         if (!IsStage && _showRequested)
             Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetLimits) { Limits = GetWindowLimits(DesktopScaling) ?? default(OpenHarmonyWindowLimits) });
     }
-    public void SetExtendClientAreaToDecorationsHint(bool extendIntoClientAreaHint) { }
-    public void SetExtendClientAreaTitleBarHeightHint(double titleBarHeight) { }
-    public void BeginMoveDrag(PointerPressedEventArgs e) { }
+    public void SetExtendClientAreaToDecorationsHint(bool extendIntoClientAreaHint)
+    {
+        if (_extendTitleBar == extendIntoClientAreaHint)
+            return;
+        _extendTitleBar = extendIntoClientAreaHint;
+        RequestTitleBarLayout();
+    }
+
+    public void SetExtendClientAreaTitleBarHeightHint(double titleBarHeight)
+    {
+        var height = double.IsFinite(titleBarHeight) && titleBarHeight >= 0 ? titleBarHeight : -1;
+        if (_titleBarHeight == height)
+            return;
+        _titleBarHeight = height;
+        if (_extendTitleBar)
+            RequestTitleBarLayout();
+    }
+
+    private void RequestTitleBarLayout()
+    {
+        if (_stageDesktop)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetExtendedTitleBar)
+            {
+                ExtendTitleBar = _extendTitleBar,
+                TitleBarHeight = _titleBarHeight,
+                TitleBarTheme = _titleBarTheme
+            });
+    }
+
+    internal void ReportTitleBar(bool extended, double height, double buttonInset)
+    {
+        if (_closeRequested || _disposed)
+            return;
+        var margins = extended ? new Thickness(0, height, buttonInset, 0) : default;
+        if (IsClientAreaExtendedToDecorations == extended && ExtendedMargins == margins)
+            return;
+        IsClientAreaExtendedToDecorations = extended;
+        ExtendedMargins = margins;
+        ExtendClientAreaToDecorationsChanged?.Invoke(extended);
+    }
+
+    public void BeginMoveDrag(PointerPressedEventArgs e)
+    {
+        if (_dispatchingTitleBarPress && IsClientAreaExtendedToDecorations && AcceptsInput)
+            _moveRequested = true;
+    }
+
+    internal bool DispatchTitleBarPress(bool mouse, long contact, double x, double y, RawInputModifiers modifiers,
+        Func<bool> acceptMove)
+    {
+        _dispatchingTitleBarPress = true;
+        try
+        {
+            if (mouse)
+                Surface.HardwarePointer(1, 1, x, y, 0, 0, modifiers);
+            else
+                Surface.Touch(contact, TouchPhase.Begin, x, y);
+
+            if (!_moveRequested || !acceptMove())
+                return false;
+            if (mouse)
+                Surface.CancelHardwarePointer();
+            else
+                Surface.Touch(contact, TouchPhase.Cancel, x, y);
+            return true;
+        }
+        finally
+        {
+            _moveRequested = false;
+            _dispatchingTitleBarPress = false;
+        }
+    }
     public void BeginResizeDrag(WindowEdge edge, PointerPressedEventArgs e) { }
     public void SetInputRoot(IInputRoot inputRoot) => Surface.SetInputRoot(inputRoot);
     public Point PointToClient(PixelPoint point) => Surface.PointToClient(point);
@@ -343,7 +417,14 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     public IPopupImpl? CreatePopup() => Surface.CreatePopup();
     public void SetTransparencyLevelHint(IReadOnlyList<WindowTransparencyLevel> levels) =>
         Surface.SetTransparencyLevelHint(levels);
-    public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant) => Surface.SetFrameThemeVariant(themeVariant);
+    public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant)
+    {
+        if (_titleBarTheme == themeVariant)
+            return;
+        _titleBarTheme = themeVariant;
+        if (_extendTitleBar)
+            RequestTitleBarLayout();
+    }
     public object? TryGetFeature(Type featureType) => Surface.TryGetFeature(featureType);
 
     IFramebufferRenderTarget IFramebufferPlatformSurface.CreateFramebufferRenderTarget() =>
@@ -357,6 +438,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
         AllowedWindowActionsChanged?.Invoke(AllowedWindowActions);
         if (!enabled)
         {
+            ReportTitleBar(false, 0, 0);
             _requestedWindowState = null;
             ReportWindowState(WindowState.Normal);
             return;
@@ -365,6 +447,8 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             SetStageCaptionButtons();
         if (!_resizable)
             Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetResizable) { Resizable = false });
+        if (_extendTitleBar)
+            RequestTitleBarLayout();
     }
 
     internal void ReportWindowState(WindowState state)

@@ -20,6 +20,10 @@ export const clearWindowInsets: () => void;
 export const reportChildFrame: (key: number, windowId: number, displayId: number, x: number, y: number,
                                 width: number, height: number) => void;
 export const reportChildEvent: (key: number, event: number) => void;
+export const supportsTitleBar: () => boolean;
+export const reportTitleBar: (extended: boolean, height: number, buttonInset: number) => void;
+export const titleBarPress: (surfaceId: string, mouse: boolean, contact: number, x: number, y: number,
+  modifiers: number) => number;
 export const requestChildClose: (key: number) => Promise<boolean>;
 export const requestBack: () => boolean;
 export const updateSurface: (surfaceId: string, width: number, height: number, scaling: number,

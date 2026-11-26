@@ -7,6 +7,17 @@ namespace Counter;
 
 public static partial class Program
 {
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_report_title_bar")]
+    public static void ReportTitleBar(int extended, double height, double buttonInset)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.ReportTitleBar(extended != 0, height, buttonInset);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_title_bar_press")]
+    public static int TitleBarPress(long surface, int mouse, long contact, double x, double y, int modifiers) =>
+        Host.IsValueCreated && Host.Value.DispatchTitleBarPress(surface, mouse != 0, contact, x, y, modifiers) ? 1 : 0;
+
     [UnmanagedCallersOnly(EntryPoint = "avaoh_update_child_surface")]
     public static void UpdateChildSurface(int key, long token, int width, int height, double scaling)
     {

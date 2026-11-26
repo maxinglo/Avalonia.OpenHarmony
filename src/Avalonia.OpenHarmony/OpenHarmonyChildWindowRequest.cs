@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Platform;
 
 namespace Avalonia.OpenHarmony;
 
@@ -15,7 +16,8 @@ internal enum OpenHarmonyChildWindowOperation
     SetResizable,
     SetLimits,
     SetState,
-    SetCaptionButtons
+    SetCaptionButtons,
+    SetExtendedTitleBar
 }
 
 internal readonly record struct OpenHarmonyChildWindowRequest(long Id, OpenHarmonyChildWindowOperation Operation)
@@ -33,6 +35,9 @@ internal readonly record struct OpenHarmonyChildWindowRequest(long Id, OpenHarmo
     public int StateRequestVersion { get; init; }
     public bool CanMinimize { get; init; }
     public bool CanMaximize { get; init; }
+    public bool ExtendTitleBar { get; init; }
+    public double TitleBarHeight { get; init; }
+    public PlatformThemeVariant? TitleBarTheme { get; init; }
 }
 
 internal readonly record struct OpenHarmonyWindowLimits(int? MinWidth, int? MinHeight, int? MaxWidth, int? MaxHeight);

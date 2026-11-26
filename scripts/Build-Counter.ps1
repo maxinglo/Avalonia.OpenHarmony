@@ -79,7 +79,8 @@ $counterExports = @(
     'avaoh_set_avoid_area', 'avaoh_set_child_avoid_area', 'avaoh_set_window_inset_properties', 'avaoh_clear_window_insets',
     'avaoh_accessibility_configure', 'avaoh_accessibility_invoke', 'avaoh_accessibility_action',
     'avaoh_update_child_surface', 'avaoh_close_child_surface', 'avaoh_report_child_frame',
-    'avaoh_report_child_event', 'avaoh_request_child_close', 'avaoh_report_tray_event'
+    'avaoh_report_child_event', 'avaoh_request_child_close', 'avaoh_report_tray_event',
+    'avaoh_report_title_bar', 'avaoh_title_bar_press'
 )
 foreach ($export in $counterExports) {
     if ($symbols -notmatch "\b$export\b") { throw "The NativeAOT application is missing $export." }

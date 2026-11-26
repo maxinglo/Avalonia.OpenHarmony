@@ -1,3 +1,4 @@
+import { ConfigurationConstant } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -35,7 +36,12 @@ interface WindowRequest {
   state?: string;
   canMinimize?: boolean;
   canMaximize?: boolean;
+  extendTitleBar?: boolean;
+  titleBarHeight?: number;
+  titleBarTheme?: string;
 }
+
+let currentStage: ChildWindows | undefined;
 
 export const childWindowPage: string = 'pages/AvaloniaChildWindow';
 
@@ -45,6 +51,11 @@ export function childWindowName(key: number): string {
 
 export function reportStageDestroyed(): void {
   bridge.reportChildEvent(0, ChildEvent.Destroyed);
+}
+
+export function handleStageTitleBarPress(surfaceId: string, mouse: boolean, contact: number, x: number, y: number,
+  modifiers: number, scale: number): number {
+  return currentStage?.titleBarPress(surfaceId, mouse, contact, x, y, modifiers, scale) ?? 0;
 }
 
 export class ChildWindows {
@@ -61,6 +72,14 @@ export class ChildWindows {
   private desktop: boolean = false;
   private stageStatusDidChange: boolean = false;
   private stageState: ChildEvent | undefined = undefined;
+  private extendedTitleBar: boolean = false;
+  private titleBarHeightHint: number = -1;
+  private nativeTitleBarHeight: number = 0;
+  private titleBarHeight: number = 0;
+  private titleBarButtonInset: number = 0;
+  private observingTitleButtons: boolean = false;
+  private originalButtonColor: ConfigurationConstant.ColorMode | undefined;
+  private appliedButtonColor: ConfigurationConstant.ColorMode | undefined;
 
   constructor(stage: window.WindowStage, main: window.Window, enableAccessibility: boolean,
     enableInboundDrop: boolean = false, enableTextDragSource: boolean = false) {
@@ -69,12 +88,17 @@ export class ChildWindows {
     this.enableAccessibility = enableAccessibility;
     this.enableInboundDrop = enableInboundDrop;
     this.enableTextDragSource = enableTextDragSource;
+    currentStage = this;
     bridge.reportChildEvent(0, ChildEvent.StageCreated);
     this.observeStage();
   }
 
   stop(): void {
     this.active = false;
+    if (currentStage === this) {
+      currentStage = undefined;
+    }
+    this.stopObservingTitleButtons();
     this.unobserveStage();
     for (const key of this.windows.keys()) {
       this.close(key);
@@ -191,6 +215,10 @@ export class ChildWindows {
           }
           this.main.setWindowTitleButtonVisible(request.canMaximize, request.canMinimize);
           return true;
+        case 'setExtendedTitleBar':
+          return request.extendTitleBar !== undefined && request.titleBarHeight !== undefined &&
+            Number.isFinite(request.titleBarHeight) &&
+            this.setExtendedTitleBar(request.extendTitleBar, request.titleBarHeight, request.titleBarTheme);
         default:
           return false;
       }
@@ -198,6 +226,126 @@ export class ChildWindows {
       this.warnStage(request.operation, error as BusinessError);
       return false;
     }
+  }
+
+  private setExtendedTitleBar(extended: boolean, heightHint: number, theme?: string): boolean {
+    if (!bridge.supportsTitleBar()) {
+      return false;
+    }
+    this.titleBarHeightHint = heightHint;
+    if (this.extendedTitleBar !== extended) {
+      if (extended) {
+        this.nativeTitleBarHeight = this.main.getWindowDecorHeight();
+      }
+      this.main.setWindowDecorVisible(!extended);
+      if (this.main.getWindowDecorVisible() === extended) {
+        return false;
+      }
+    }
+    if (extended) {
+      if (!this.observingTitleButtons) {
+        this.observingTitleButtons = this.observeStageAction(() =>
+          this.main.on('windowTitleButtonRectChange', this.titleButtonsChanged));
+      }
+      try {
+        this.updateTitleBarTheme(theme);
+        this.updateTitleBar(this.main.getTitleButtonRect());
+      } catch (error) {
+        this.observeStageAction(() => this.main.setWindowDecorVisible(true));
+        this.clearTitleBarLayout();
+        this.warnStage('getTitleButtonRect', error as BusinessError);
+        return false;
+      }
+    } else {
+      this.clearTitleBarLayout();
+    }
+    return true;
+  }
+
+  private titleButtonsChanged = (buttons: window.TitleButtonRect): void => {
+    if (this.extendedTitleBar) {
+      this.observeStageAction(() => this.updateTitleBar(buttons));
+    }
+  };
+
+  private updateTitleBar(buttons: window.TitleButtonRect): void {
+    const requestedHeight = this.titleBarHeightHint >= 0 ? this.titleBarHeightHint : this.nativeTitleBarHeight;
+    const height = Math.max(requestedHeight, buttons.top + buttons.height);
+    const inset = Math.max(0, buttons.width);
+    if (!this.extendedTitleBar || height !== this.titleBarHeight || inset !== this.titleBarButtonInset) {
+      this.extendedTitleBar = true;
+      this.titleBarHeight = height;
+      this.titleBarButtonInset = inset;
+      bridge.reportTitleBar(true, height, inset);
+    }
+  }
+
+  private stopObservingTitleButtons(): void {
+    if (this.observingTitleButtons) {
+      this.observeStageAction(() => this.main.off('windowTitleButtonRectChange', this.titleButtonsChanged));
+      this.observingTitleButtons = false;
+    }
+  }
+
+  private updateTitleBarTheme(theme?: string): void {
+    // Keep native caption buttons legible when the extended Avalonia title bar changes theme.
+    const restore = theme !== 'dark' && theme !== 'light';
+    const color = theme === 'dark' ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK :
+      theme === 'light' ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT : this.originalButtonColor;
+    if (color === undefined) {
+      return;
+    }
+    try {
+      if (color !== this.appliedButtonColor) {
+        const style = this.main.getDecorButtonStyle();
+        const previousColor = style.colorMode ?? ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
+        style.colorMode = color;
+        this.main.setDecorButtonStyle(style);
+        this.originalButtonColor = this.originalButtonColor ?? previousColor;
+      }
+      this.appliedButtonColor = restore ? undefined : color;
+      if (restore) {
+        this.originalButtonColor = undefined;
+      }
+    } catch (error) {
+      this.warnStage('setDecorButtonStyle', error as BusinessError);
+    }
+  }
+
+  private clearTitleBarLayout(): void {
+    this.stopObservingTitleButtons();
+    this.updateTitleBarTheme();
+    if (this.extendedTitleBar) {
+      this.extendedTitleBar = false;
+      this.titleBarHeight = 0;
+      this.titleBarButtonInset = 0;
+      bridge.reportTitleBar(false, 0, 0);
+    }
+  }
+
+  titleBarPress(surfaceId: string, mouse: boolean, contact: number, x: number, y: number, modifiers: number,
+    scale: number): number {
+    if (!this.extendedTitleBar || y < 0 || y >= this.titleBarHeight * scale ||
+      this.stageState !== ChildEvent.StageNormal) {
+      return 0;
+    }
+    try {
+      if (this.main.getWindowStatus() !== window.WindowStatusType.FLOATING) {
+        return 0;
+      }
+    } catch (error) {
+      this.warnStage('getWindowStatus', error as BusinessError);
+      return 0;
+    }
+    const route = bridge.titleBarPress(surfaceId, mouse, contact, x, y, modifiers);
+    if (route === 2) {
+      try {
+        this.main.startMoving().catch((error: BusinessError): void => this.warnStage('startMoving', error));
+      } catch (error) {
+        this.warnStage('startMoving', error as BusinessError);
+      }
+    }
+    return route;
   }
 
   private async setStageState(state: string | undefined): Promise<boolean> {
@@ -246,6 +394,9 @@ export class ChildWindows {
   private stageStatusChanged = (state: window.WindowStatusType): void => {
     this.stageRectChanged();
     this.reportStageState(state);
+    if (this.extendedTitleBar) {
+      this.observeStageAction(() => this.updateTitleBar(this.main.getTitleButtonRect()));
+    }
   };
 
   private stageVisibilityChanged = (event: window.WindowEventType): void => {
@@ -271,6 +422,8 @@ export class ChildWindows {
     this.stageState = undefined;
     if (enabled) {
       this.observeStageAction(() => this.stageStatusChanged(this.main.getWindowStatus()));
+    } else {
+      this.clearTitleBarLayout();
     }
   };
 

@@ -185,7 +185,11 @@ public sealed partial class CounterApp : Application
                 .. windowTargets
 #endif
             ]);
+#if OHOS_COUNTER_WINDOWS
+            var surface = new Border { Child = WithCustomTitleBar(border) };
+#else
             var surface = new Border { Child = border };
+#endif
             TopLevel.SetAutoSafeAreaPadding(surface, true);
             lifetime.MainView = surface;
         }

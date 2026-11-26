@@ -15,7 +15,7 @@ the EGL HAP on the same emulator. Use each run's `Control positions` and the cur
 | `INativeControlHostImpl` | Click the ArkUI button inside Counter and observe the Avalonia count change. Move it against the viewport edge and compare the visible bounds with the viewport. A click in the clipped area leaves the native count unchanged. Hide, detach, and reattach it and observe native visibility, disposal, and creation. |
 | `ITrayIconImpl` | **Show status bar icon** adds an item to the OS status bar or its overflow. Left-clicking it raises `TrayIcon.Clicked`. **Update status bar icon** changes the icon and hover text. Hiding removes the item, and showing restores the native item. Check the capability query before exercising the controls. |
 | `INativeMenuExporter` | Right-click the Counter item in the system tray. Click **Add one from tray** and a child of **Tray menu options**. Verify command dispatch and updated selection in the reopened native menu. This check exercises `TrayIcon.Menu` export. |
-| `IWindowImpl` | Compare the system frame and Avalonia window state after programmatic maximize, minimize, fullscreen, and normal requests. Exercise the native title bar and restore a minimized stage from the Dock or by reopening Counter. Verify the same window and process survive, with the previous count and floating frame preserved. |
+| `IWindowImpl` | Compare the system frame and Avalonia window state after programmatic maximize, minimize, fullscreen, and normal requests. Toggle title bar extension and compare the XComponent top with the native frame top. Click **Title action**, drag the custom title, and exercise native maximize, restore, minimize and close. Verify Dock restore keeps the same window and preserves its title layout and content state. |
 
 On the PC image, the status bar overflow is opened by `DockStatusBarComponent_arrowbutton` in the desktop
 layout. Take a fresh layout after opening it to locate the test icon. Move and click in one HDC command, for
@@ -37,6 +37,25 @@ the exact 1178 × 1394 px frame at (515, 281) after the system transition settle
 maximize and minimize title buttons. The programmatic and native-button minimize paths both preserved the native
 window and Avalonia owner. Reopening the ability and restoring from the Dock returned to the same native frame.
 The main counter continued from 1 to 2 in the same process.
+
+With title bar extension enabled, the Counter's XComponent started at the native frame
+top, 70 px above its ordinary origin at 1.90 scale. The 44 DIP custom header reserved
+140 DIP for the system buttons. **Title action** received a mouse click, and dragging the
+empty title area moved the same native window by 190 × 120 px. Native maximize and
+restore kept the extended title, and native minimize followed by Dock restore retained
+the process, window ID and floating frame. Disabling extension returned the surface
+to its ordinary origin. Re-enabling followed by the native close button removed the
+window from WindowManager.
+
+An isolated AudioSynx Arc debug HAP on the same emulator reused its shipping Avalonia
+view and enabled the extended title bar. With the native 37 DIP title height and
+140 DIP button reservation, the AudioSynx brand and theme icon centers were within
+2 px of all three native button centers in floating and maximized windows. Clicking
+the theme control left the frame in place. Screenshots showed dark glyphs on the
+light background and light glyphs on the dark background for all three buttons.
+Dragging the header moved the window by 174 × 112 px. Native maximize and restore
+preserved the extended title, and Dock restore after native minimization returned
+to the same floating frame and window ID. The native close button removed the window.
 
 After restoring the stage, the original modal flow still blocked the owner, returned 1 and let the owner advance
 to count 3 after closing. The embedded EGL variant received NativeVSync, presented a 2090 × 1213 frame and
