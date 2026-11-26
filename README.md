@@ -1,5 +1,7 @@
 # Avalonia.OpenHarmony
 
+[简体中文](README.zh-CN.md)
+
 Avalonia.OpenHarmony is an independent backend for hosting Avalonia 12.1.6 in a HarmonyOS API 26 ArkUI `XComponent`.
 
 **AI maintenance disclosure.** AI agents write and maintain almost all of this repository's code.
