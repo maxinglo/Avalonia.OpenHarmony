@@ -1,8 +1,8 @@
 # System clipboard
 
-Avalonia's `TopLevel.Clipboard` uses the HarmonyOS Pasteboard service. It supports plain text, string-valued `text/html`, and multiple text items. An item can contain both text and HTML. HTML copied by another application can supply its own plain-text fallback. Each operation snapshots its supported data so clipboard reads and writes can complete on a worker thread.
+Avalonia's `TopLevel.Clipboard` uses the HarmonyOS Pasteboard service. It supports plain text, string-valued `text/html`, bitmaps via PixelMap, and ordered items. An item can contain more than one format. Application formats can carry bytes or UTF-8 text, up to 4095 bytes per value. Each operation snapshots its supported data so clipboard reads and writes can complete on a worker thread.
 
-The backend disposes the transfer passed to `SetDataAsync` after materializing its supported data. Callers own the snapshot returned by `TryGetDataAsync`. The backend returns null from `TryGetInProcessDataAsync`, and `FlushAsync` completes immediately. Clear the clipboard via `ClearAsync`, `SetDataAsync(null)`, or an empty transfer. An empty string is a text item. Unsupported-only transfers leave the prior system contents intact and report `NotSupportedException`. File items, bitmaps, application-defined formats, and embedded U+0000 are outside the supported formats.
+The backend disposes the transfer passed to `SetDataAsync` after materializing its supported data. Callers own the snapshot returned by `TryGetDataAsync`. The backend returns null from `TryGetInProcessDataAsync`, and `FlushAsync` completes immediately. Clear the clipboard via `ClearAsync`, `SetDataAsync(null)`, or an empty transfer. An empty string is a text item. Unsupported-only transfers leave the prior system contents intact and report `NotSupportedException`. Embedded U+0000 is excluded from standard text and HTML and can be carried by an application format. File URIs require a verifiable temporary read grant and a read-only file representation.
 
 ## Authorize paste
 
@@ -22,4 +22,4 @@ Application code can call the regular `IClipboard` methods with the same system 
 
 ## Verification
 
-The x86_64 and ARM64 API 26 SDK stubs export all imported functions. A Windows probe exercises the real Avalonia `TextBox` through a C ABI fixture. It covers copy and focused paste, an empty string versus clear, 1.44 MB of Unicode text, HTML and multiple items, denied reads, rejected writes, concurrent clearing, and native handle cleanup. Confirmation of cross-app copy and the security button grant requires a running API 26 target.
+The x86_64 and ARM64 API 26 SDK stubs export all imported functions. The Windows clipboard probe checks pixel and alpha values, item order, application formats, permission failure and clear. The PC Counter used the native PasteButton and recovered both items, text, HTML, identical bitmap pixels, application text and bytes, and an empty byte value. Clearing and pasting then produced an empty result.

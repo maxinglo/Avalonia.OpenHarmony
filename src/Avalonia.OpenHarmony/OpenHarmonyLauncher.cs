@@ -11,18 +11,25 @@ public sealed class OpenHarmonyLauncher(Func<string, string, Task<OpenHarmonySys
     public Task<bool> LaunchUriAsync(Uri uri)
     {
         ArgumentNullException.ThrowIfNull(uri);
-        return uri.IsAbsoluteUri && uri.Scheme is "http" or "https"
-            ? LaunchAsync("launcher.uri", uri.AbsoluteUri)
-            : Task.FromResult(false);
+        if (!uri.IsAbsoluteUri || uri.IsFile)
+            return Task.FromResult(false);
+        if (uri.Scheme == "mailto")
+            return LaunchAsync("launcher.mailto", uri.AbsoluteUri);
+        if (uri.Host.Length > 0 && uri.AbsoluteUri.StartsWith(uri.Scheme + "://", StringComparison.Ordinal))
+            return LaunchAsync("launcher.uri", uri.AbsoluteUri);
+        return Task.FromResult(false);
     }
 
     public Task<bool> LaunchFileAsync(IStorageItem storageItem)
     {
         ArgumentNullException.ThrowIfNull(storageItem);
-        if (storageItem is not IStorageFile || !storageItem.Path.IsAbsoluteUri || !storageItem.Path.IsFile)
-            return Task.FromResult(false);
-
         var path = storageItem.Path;
+        if (!path.IsAbsoluteUri || !path.IsFile)
+            return Task.FromResult(false);
+        if (storageItem is IStorageFolder)
+            return LaunchAsync("launcher.folder", path.AbsoluteUri);
+        if (storageItem is not IStorageFile)
+            return Task.FromResult(false);
         return string.IsNullOrEmpty(path.Host)
             ? LaunchAsync("launcher.path", path.LocalPath)
             : LaunchAsync("launcher.file", path.AbsoluteUri);

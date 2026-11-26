@@ -11,6 +11,9 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    "requestPermissions": [
+      { "name": "ohos.permission.WINDOW_TOPMOST" }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",

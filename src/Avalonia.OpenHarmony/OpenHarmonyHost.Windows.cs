@@ -45,11 +45,12 @@ public sealed partial class OpenHarmonyHost
     private WindowState _stageWindowState;
     private PixelSize? _stageFrameSize;
     private long _closedStageToken;
+    private OpenHarmonyEgl.WindowedGraphics? _windowedGraphics;
 
     private WindowRoute CreateWindowRoute(int id, bool isStage, OpenHarmonyWindowOptions options)
     {
         var route = new WindowRoute();
-        var surface = new SurfaceTopLevel(id, AvaloniaLocator.Current.GetRequiredService<Compositor>(),
+        var surface = new SurfaceTopLevel(id, GetWindowCompositor(),
             (_, pixels, width, height, rowBytes) =>
             {
                 var token = Volatile.Read(ref route.Token);
@@ -60,8 +61,36 @@ public sealed partial class OpenHarmonyHost
         surface.SetNativeControlSurface(0);
         surface.SetInputMethodActive(isStage && IsInputMethodWindowActive);
         route.Window = new OpenHarmonyChildWindow(id, isStage, surface,
-            request => SendWindowRequest(options, request), OnManagedWindowClosed, _reportError);
+            request => SendWindowRequest(options, request), OnManagedWindowClosed, _reportError, GetStartupWindowScaling);
         return route;
+    }
+
+    private double GetStartupWindowScaling(PixelPoint? position)
+    {
+        if (position is { } point && _screens.ScreenFromPoint(point) is { } screen)
+            return screen.Scaling;
+        return _stageRoute?.Window.DesktopScaling ?? _screens.AllScreens.FirstOrDefault(screen => screen.IsPrimary)?.Scaling ?? 1;
+    }
+
+    private Compositor GetWindowCompositor()
+    {
+        if (_eglCompositor is { } compositor)
+            return compositor;
+        if (!_eglUnavailable && AvaloniaLocator.Current.GetService<OpenHarmonyRenderingOptions>()?.UseEgl == true)
+        {
+            try
+            {
+                _egl ??= new OpenHarmonyEgl();
+                _windowedGraphics ??= new OpenHarmonyEgl.WindowedGraphics(_egl.Graphics,
+                    error => Post(() => FallBackWindowedCompositor(error)));
+                return _eglCompositor = new Compositor(_windowedGraphics);
+            }
+            catch (Exception error)
+            {
+                ReportSoftwareFallback(error);
+            }
+        }
+        return AvaloniaLocator.Current.GetRequiredService<Compositor>();
     }
 
     private OpenHarmonyChildWindow CreateOwnedWindow()
@@ -72,6 +101,7 @@ public sealed partial class OpenHarmonyHost
         var id = checked(++_nextChildId);
         var route = CreateWindowRoute(id, false, options);
         _children.Add(id, route);
+        route.Window.ReportFreeform(_stageDesktop);
         return route.Window;
     }
 
@@ -88,7 +118,7 @@ public sealed partial class OpenHarmonyHost
                 return;
             var route = CreateWindowRoute(0, true, options);
             _stageRoute = route;
-            route.Window.ReportStageDesktop(_stageDesktop);
+            route.Window.ReportFreeform(_stageDesktop);
             route.Window.ReportWindowState(_stageWindowState);
             _topLevel = route.Window.Surface;
             if (_requestInsetsCommand is { } command)
@@ -98,7 +128,6 @@ public sealed partial class OpenHarmonyHost
             RefreshWindowInsets();
             _stageRoot = new Window(route.Window)
             {
-                WindowDecorations = WindowDecorations.None,
                 Content = _lifetime.MainView
             };
             _stageRoot.Show();
@@ -119,13 +148,64 @@ public sealed partial class OpenHarmonyHost
         if (token <= 0 || (token != route.Token && token <= route.LatestToken))
             return false;
         if (token != route.Token)
+        {
             CancelInboundDrag(route.Token);
+            route.Window.Surface.SetEglWindow(TryAcquireRouteEglWindow(route, token, width, height, scaling));
+        }
         Volatile.Write(ref route.Token, token);
         route.Window.Surface.SetNativeControlSurface(token);
         route.LatestToken = token;
         route.Window.ApplySurfaceGeometry(width, height, scaling);
         return true;
     }
+
+    private OpenHarmonyEgl.Window? TryAcquireRouteEglWindow(WindowRoute route, long token, int width, int height,
+        double scaling)
+    {
+        if (_windowedGraphics is not { Enabled: true } || _egl is null)
+            return null;
+        try
+        {
+            var window = _egl.AcquireWindow(token, new PixelSize(width, height), scaling,
+                error => Post(() => FallBackWindowSurface(route, token, error)));
+            window.CanRender = () => route.Window.CanRender;
+            return window;
+        }
+        catch (Exception error)
+        {
+            ReportWindowEglFailure(route, token, error);
+            return null;
+        }
+    }
+
+    private void FallBackWindowSurface(WindowRoute route, long token, Exception error)
+    {
+        if (route.Token != token || route.Window.IsCloseRequested || !route.Window.Surface.UsesEgl)
+            return;
+        ReportWindowEglFailure(route, token, error);
+        UseWindowFramebuffer(route);
+    }
+
+    private void FallBackWindowedCompositor(Exception error)
+    {
+        ReportSoftwareFallback(error);
+        if (_stageRoute is { } stage)
+            UseWindowFramebuffer(stage);
+        foreach (var child in _children.Values.ToArray())
+            UseWindowFramebuffer(child);
+    }
+
+    private static void UseWindowFramebuffer(WindowRoute route)
+    {
+        var surface = route.Window.Surface;
+        if (!surface.UsesEgl || route.Window.IsCloseRequested)
+            return;
+        surface.SetEglWindow(null);
+        route.Window.ApplySurfaceGeometry(surface.PixelSize.Width, surface.PixelSize.Height, surface.RenderScaling);
+    }
+
+    private void ReportWindowEglFailure(WindowRoute route, long token, Exception error) =>
+        _reportError($"OpenHarmony EGL failed for window {route.Window.Id}, surface {token}. Using software: {error.Message}");
 
     private bool DetachStageSurface(long token)
     {
@@ -237,6 +317,10 @@ public sealed partial class OpenHarmonyHost
             case OpenHarmonyChildWindowEvent.ModalityReleased:
                 route.Window.ReportModalityReleased();
                 break;
+            default:
+                if (_stageDesktop && GetWindowState(state) is { } observed)
+                    route.Window.ReportWindowState(observed);
+                break;
         }
         RefreshChildInputMethod(route);
         CancelUnavailableInboundDrag();
@@ -258,31 +342,40 @@ public sealed partial class OpenHarmonyHost
         if (state == OpenHarmonyChildWindowEvent.StageDesktopAvailable)
         {
             _stageDesktop = true;
-            _stageRoute?.Window.ReportStageDesktop(true);
+            _stageRoute?.Window.ReportFreeform(true);
+            foreach (var child in _children.Values.ToArray())
+                child.Window.ReportFreeform(true);
             return;
         }
 
-        var observed = state switch
-        {
-            OpenHarmonyChildWindowEvent.StageDesktopUnavailable or OpenHarmonyChildWindowEvent.StageNormal => WindowState.Normal,
-            OpenHarmonyChildWindowEvent.StageMaximized => WindowState.Maximized,
-            OpenHarmonyChildWindowEvent.StageMinimized => WindowState.Minimized,
-            OpenHarmonyChildWindowEvent.StageFullScreen => WindowState.FullScreen,
-            _ => (WindowState?)null
-        };
-        if (!_stageDesktop || observed is null)
+        if (!_stageDesktop)
             return;
         if (state == OpenHarmonyChildWindowEvent.StageDesktopUnavailable)
         {
             _stageDesktop = false;
             _stageFrameSize = null;
-            _stageRoute?.Window.ReportStageDesktop(false);
+            _stageWindowState = WindowState.Normal;
+            _stageRoute?.Window.ReportFreeform(false);
+            foreach (var child in _children.Values.ToArray())
+                child.Window.ReportFreeform(false);
             UpdateSurfaceOrigin();
         }
-        _stageWindowState = observed.Value;
-        _stageRoute?.Window.ReportWindowState(observed.Value);
+        else if (GetWindowState(state) is { } observed)
+        {
+            _stageWindowState = observed;
+            _stageRoute?.Window.ReportWindowState(observed);
+        }
         RefreshRendering();
     }
+
+    private static WindowState? GetWindowState(OpenHarmonyChildWindowEvent state) => state switch
+    {
+        OpenHarmonyChildWindowEvent.StageNormal => WindowState.Normal,
+        OpenHarmonyChildWindowEvent.StageMaximized => WindowState.Maximized,
+        OpenHarmonyChildWindowEvent.StageMinimized => WindowState.Minimized,
+        OpenHarmonyChildWindowEvent.StageFullScreen => WindowState.FullScreen,
+        _ => null
+    };
 
     /// <summary>Returns true if Avalonia cancels the native title-bar close. Call off the ArkTS UI thread.</summary>
     public bool RequestChildClose(int key)
@@ -427,6 +520,9 @@ public sealed partial class OpenHarmonyHost
                 OpenHarmonyChildWindowOperation.SetLimits => "setLimits",
                 OpenHarmonyChildWindowOperation.SetState => "setState",
                 OpenHarmonyChildWindowOperation.SetCaptionButtons => "setCaptionButtons",
+                OpenHarmonyChildWindowOperation.SetExtendedTitleBar => "setExtendedTitleBar",
+                OpenHarmonyChildWindowOperation.SetTopmost => "setTopmost",
+                OpenHarmonyChildWindowOperation.ResizeFromGrip => "resizeFromGrip",
                 _ => throw new ArgumentOutOfRangeException(nameof(request))
             });
             if (request.Position is { } position)
@@ -439,7 +535,16 @@ public sealed partial class OpenHarmonyHost
                 json.WriteNumber("width", size.Width);
                 json.WriteNumber("height", size.Height);
             }
+            if (request.Operation == OpenHarmonyChildWindowOperation.ResizeFromGrip)
+            {
+                json.WriteBoolean("resizeFromLeft", request.ResizeFromLeft);
+                json.WriteBoolean("resizeFromTop", request.ResizeFromTop);
+            }
             json.WriteString("title", request.Title);
+            if (request.OwnerId is { } ownerId)
+                json.WriteNumber("ownerId", ownerId);
+            if (request.Independent)
+                json.WriteBoolean("independent", true);
             json.WriteBoolean("modal", request.Modal);
             json.WriteBoolean("activate", request.Activate);
             json.WriteBoolean("decorated", request.Decorated);
@@ -447,10 +552,19 @@ public sealed partial class OpenHarmonyHost
                 json.WriteBoolean("resizable", resizable);
             if (request.State is { } state)
                 json.WriteString("state", state.ToString().ToLowerInvariant());
-            if (request.Operation == OpenHarmonyChildWindowOperation.SetCaptionButtons)
+            if (request.Operation is OpenHarmonyChildWindowOperation.Show or OpenHarmonyChildWindowOperation.SetCaptionButtons)
             {
                 json.WriteBoolean("canMinimize", request.CanMinimize);
                 json.WriteBoolean("canMaximize", request.CanMaximize);
+            }
+            if (request.Topmost is { } topmost)
+                json.WriteBoolean("topmost", topmost);
+            if (request.Operation == OpenHarmonyChildWindowOperation.SetExtendedTitleBar)
+            {
+                json.WriteBoolean("extendTitleBar", request.ExtendTitleBar);
+                json.WriteNumber("titleBarHeight", request.TitleBarHeight);
+                if (request.TitleBarTheme is { } theme)
+                    json.WriteString("titleBarTheme", theme == PlatformThemeVariant.Dark ? "dark" : "light");
             }
             if (request.Limits is { } limits)
             {

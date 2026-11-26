@@ -42,15 +42,20 @@ struct AppLibrary {
         closeChildSurface = reinterpret_cast<decltype(closeChildSurface)>(dlsym(handle, "avaoh_close_child_surface"));
         reportChildFrame = reinterpret_cast<decltype(reportChildFrame)>(dlsym(handle, "avaoh_report_child_frame"));
         reportChildEvent = reinterpret_cast<decltype(reportChildEvent)>(dlsym(handle, "avaoh_report_child_event"));
+        reportTitleBar = reinterpret_cast<decltype(reportTitleBar)>(dlsym(handle, "avaoh_report_title_bar"));
+        titleBarPress = reinterpret_cast<decltype(titleBarPress)>(dlsym(handle, "avaoh_title_bar_press"));
         reportTrayEvent = reinterpret_cast<decltype(reportTrayEvent)>(dlsym(handle, "avaoh_report_tray_event"));
         requestChildClose = reinterpret_cast<decltype(requestChildClose)>(dlsym(handle, "avaoh_request_child_close"));
         touch = reinterpret_cast<decltype(touch)>(dlsym(handle, "avaoh_touch"));
+        touchWithDetails = reinterpret_cast<decltype(touchWithDetails)>(dlsym(handle, "avaoh_touch_with_details"));
         pointer = reinterpret_cast<decltype(pointer)>(dlsym(handle, "avaoh_pointer"));
+        pointerWithGesture = reinterpret_cast<decltype(pointerWithGesture)>(dlsym(handle, "avaoh_pointer_with_gesture"));
         key = reinterpret_cast<decltype(key)>(dlsym(handle, "avaoh_key"));
         inputBlur = reinterpret_cast<decltype(inputBlur)>(dlsym(handle, "avaoh_input_blur"));
         drag = reinterpret_cast<decltype(drag)>(dlsym(handle, "avaoh_drag"));
         setLifecycle = reinterpret_cast<decltype(setLifecycle)>(dlsym(handle, "avaoh_set_lifecycle"));
         setTheme = reinterpret_cast<decltype(setTheme)>(dlsym(handle, "avaoh_set_theme"));
+        setAccent = reinterpret_cast<decltype(setAccent)>(dlsym(handle, "avaoh_set_accent"));
         setDisplays = reinterpret_cast<decltype(setDisplays)>(dlsym(handle, "avaoh_set_displays"));
         setWindowPosition = reinterpret_cast<decltype(setWindowPosition)>(dlsym(handle, "avaoh_set_window_position"));
         setSurfaceOffset = reinterpret_cast<decltype(setSurfaceOffset)>(dlsym(handle, "avaoh_set_surface_offset"));
@@ -74,15 +79,20 @@ struct AppLibrary {
     void (*closeChildSurface)(int32_t, int64_t) = nullptr;
     void (*reportChildFrame)(int32_t, int32_t, int64_t, int32_t, int32_t, int32_t, int32_t) = nullptr;
     void (*reportChildEvent)(int32_t, int32_t) = nullptr;
+    void (*reportTitleBar)(int32_t, double, double) = nullptr;
+    int32_t (*titleBarPress)(int64_t, int32_t, int64_t, double, double, int32_t) = nullptr;
     void (*reportTrayEvent)(int64_t, const char*, int32_t) = nullptr;
     int32_t (*requestChildClose)(int32_t) = nullptr;
     void (*touch)(int64_t, int64_t, int32_t, double, double) = nullptr;
+    void (*touchWithDetails)(int64_t, int64_t, int32_t, double, double, int32_t, int32_t, double, double, double) = nullptr;
     void (*pointer)(int64_t, int32_t, int32_t, double, double, double, double, int32_t) = nullptr;
+    void (*pointerWithGesture)(int64_t, int32_t, int32_t, double, double, double, double, int32_t, int64_t) = nullptr;
     int32_t (*key)(int64_t, int32_t, int32_t, int32_t, int32_t, int32_t) = nullptr;
     void (*inputBlur)(int64_t) = nullptr;
     int32_t (*drag)(int64_t, int32_t, double, double, int32_t, int32_t, const char*, int32_t) = nullptr;
     void (*setLifecycle)(int32_t) = nullptr;
     void (*setTheme)(int32_t) = nullptr;
+    void (*setAccent)(uint32_t) = nullptr;
     avalonia::DisplayCallback setDisplays = nullptr;
     void (*setWindowPosition)(int64_t, int32_t, int32_t) = nullptr;
     void (*setSurfaceOffset)(int64_t, int32_t, int32_t) = nullptr;
@@ -127,6 +137,7 @@ enum class WindowReportEvent : int32_t {
     StageCreated = 5,
     ModalityReleased = 6,
     StageDesktopAvailable = 7,
+    Normal = 9,
     StageFullScreen = 12,
 };
 
@@ -138,8 +149,9 @@ constexpr bool IsWindowReportEvent(int32_t windowKey, int32_t eventId)
     if (windowKey == MainWindow)
         return event == WindowReportEvent::Destroyed || event == WindowReportEvent::StageCreated ||
             (event >= WindowReportEvent::StageDesktopAvailable && event <= WindowReportEvent::StageFullScreen);
-    return event >= WindowReportEvent::Shown && event <= WindowReportEvent::ModalityReleased &&
-        event != WindowReportEvent::StageCreated;
+    return (event >= WindowReportEvent::Shown && event <= WindowReportEvent::ModalityReleased &&
+        event != WindowReportEvent::StageCreated) ||
+        (event >= WindowReportEvent::Normal && event <= WindowReportEvent::StageFullScreen);
 }
 std::unordered_map<int32_t, Surface> surfaces;
 int64_t nextToken = 0;
@@ -275,6 +287,19 @@ napi_value SetTheme(napi_env env, napi_callback_info info)
         return Error(env, "Expected a platform dark-mode flag.");
     if (auto callback = App().setTheme; callback != nullptr)
         callback(dark ? 1 : 0);
+    return nullptr;
+}
+
+napi_value SetAccent(napi_env env, napi_callback_info info)
+{
+    size_t count = 1;
+    napi_value argument;
+    uint32_t argb;
+    if (napi_get_cb_info(env, info, &count, &argument, nullptr, nullptr) != napi_ok || count != 1 ||
+        napi_get_value_uint32(env, argument, &argb) != napi_ok)
+        return Error(env, "Expected an ARGB system emphasis color.");
+    if (auto callback = App().setAccent; callback != nullptr)
+        callback(argb);
     return nullptr;
 }
 
@@ -657,35 +682,100 @@ napi_value ConfigureAccessibility(napi_env env, napi_callback_info info)
     return value;
 }
 
+napi_value SupportsTitleBar(napi_env env, napi_callback_info)
+{
+    napi_value result;
+    napi_get_boolean(env, App().reportTitleBar != nullptr && App().titleBarPress != nullptr, &result);
+    return result;
+}
+
+napi_value ReportTitleBar(napi_env env, napi_callback_info info)
+{
+    size_t count = 3;
+    napi_value args[3];
+    bool extended;
+    double height, buttonInset;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 3 ||
+        napi_get_value_bool(env, args[0], &extended) != napi_ok ||
+        napi_get_value_double(env, args[1], &height) != napi_ok || !std::isfinite(height) || height < 0 ||
+        napi_get_value_double(env, args[2], &buttonInset) != napi_ok || !std::isfinite(buttonInset) || buttonInset < 0)
+        return Error(env, "Invalid title bar geometry.");
+    if (auto callback = App().reportTitleBar)
+        callback(extended ? 1 : 0, height, buttonInset);
+    return nullptr;
+}
+
+napi_value TitleBarPress(napi_env env, napi_callback_info info)
+{
+    size_t count = 6;
+    napi_value args[6];
+    uint64_t surfaceId;
+    bool mouse;
+    int64_t contact;
+    int32_t modifiers;
+    double x, y;
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 6 ||
+        !ParseSurfaceId(env, args[0], surfaceId) || napi_get_value_bool(env, args[1], &mouse) != napi_ok ||
+        napi_get_value_int64(env, args[2], &contact) != napi_ok ||
+        napi_get_value_double(env, args[3], &x) != napi_ok || !std::isfinite(x) ||
+        napi_get_value_double(env, args[4], &y) != napi_ok || !std::isfinite(y) ||
+        napi_get_value_int32(env, args[5], &modifiers) != napi_ok)
+        return Error(env, "Invalid title bar press.");
+    const auto token = SurfaceToken(surfaceId);
+    const auto callback = App().titleBarPress;
+    int32_t route = 0;
+    if (token != 0 && callback != nullptr)
+        route = callback(token, mouse ? 1 : 0, contact, x, y, modifiers) ? 2 : 1;
+    napi_value result;
+    napi_create_int32(env, route, &result);
+    return result;
+}
+
 napi_value Touch(napi_env env, napi_callback_info info)
 {
-    size_t count = 5;
-    napi_value args[5];
+    size_t count = 10;
+    napi_value args[10];
     uint64_t surfaceId;
     int64_t contact;
     int32_t phase;
     double x, y;
-    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 5 ||
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || (count != 5 && count != 10) ||
         !ParseSurfaceId(env, args[0], surfaceId) ||
         napi_get_value_int64(env, args[1], &contact) != napi_ok ||
-        napi_get_value_int32(env, args[2], &phase) != napi_ok || phase < 0 || phase > 3 ||
+        napi_get_value_int32(env, args[2], &phase) != napi_ok || phase < 0 || phase > (count == 5 ? 3 : 5) ||
         napi_get_value_double(env, args[3], &x) != napi_ok || !std::isfinite(x) ||
         napi_get_value_double(env, args[4], &y) != napi_ok || !std::isfinite(y))
         return Error(env, "Invalid XComponent touch event.");
     const auto token = SurfaceToken(surfaceId);
-    if (token != 0 && App().ready())
+    if (token == 0 || !App().ready())
+        return nullptr;
+    if (count == 10 && App().touchWithDetails != nullptr) {
+        bool pen;
+        int32_t modifiers;
+        double pressure, tiltX, tiltY;
+        if (napi_get_value_bool(env, args[5], &pen) != napi_ok ||
+            (phase > 3 && !pen) ||
+            napi_get_value_int32(env, args[6], &modifiers) != napi_ok ||
+            napi_get_value_double(env, args[7], &pressure) != napi_ok || !std::isfinite(pressure) ||
+            napi_get_value_double(env, args[8], &tiltX) != napi_ok || !std::isfinite(tiltX) ||
+            napi_get_value_double(env, args[9], &tiltY) != napi_ok || !std::isfinite(tiltY))
+            return Error(env, "Invalid XComponent touch details.");
+        App().touchWithDetails(token, contact, phase, x, y, pen ? 1 : 0, modifiers, pressure, tiltX, tiltY);
+    } else if (phase <= 3) {
         App().touch(token, contact, phase, x, y);
+    }
     return nullptr;
 }
 
 napi_value Pointer(napi_env env, napi_callback_info info)
 {
-    size_t count = 8;
-    napi_value args[8];
+    size_t count = 9;
+    napi_value args[9];
     uint64_t surfaceId;
     int32_t phase, button, modifiers;
+    int64_t dragGesture = 0;
     double x, y, wheelX, wheelY;
-    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 8 ||
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || (count != 8 && count != 9) ||
         !ParseSurfaceId(env, args[0], surfaceId) ||
         napi_get_value_int32(env, args[1], &phase) != napi_ok || phase < 0 || phase > 4 ||
         napi_get_value_int32(env, args[2], &button) != napi_ok || button < 0 || button > 5 ||
@@ -693,11 +783,14 @@ napi_value Pointer(napi_env env, napi_callback_info info)
         napi_get_value_double(env, args[4], &y) != napi_ok || !std::isfinite(y) ||
         napi_get_value_double(env, args[5], &wheelX) != napi_ok || !std::isfinite(wheelX) ||
         napi_get_value_double(env, args[6], &wheelY) != napi_ok || !std::isfinite(wheelY) ||
-        napi_get_value_int32(env, args[7], &modifiers) != napi_ok)
+        napi_get_value_int32(env, args[7], &modifiers) != napi_ok ||
+        (count == 9 && napi_get_value_int64(env, args[8], &dragGesture) != napi_ok))
         return Error(env, "Invalid XComponent hardware pointer event.");
 
     const auto token = SurfaceToken(surfaceId);
-    if (token != 0 && App().pointer != nullptr)
+    if (token != 0 && App().pointerWithGesture != nullptr)
+        App().pointerWithGesture(token, phase, button, x, y, wheelX, wheelY, modifiers, dragGesture);
+    else if (token != 0 && App().pointer != nullptr)
         App().pointer(token, phase, button, x, y, wheelX, wheelY, modifiers);
     return nullptr;
 }
@@ -742,11 +835,14 @@ napi_value InputBlur(napi_env env, napi_callback_info info)
     return nullptr;
 }
 
-napi_value Drag(napi_env env, napi_callback_info info)
+napi_value DispatchDrag(napi_env env, napi_callback_info info, bool returnEffect)
 {
-    const auto rejected = [env]() {
+    const auto response = [env, returnEffect](int32_t effect) {
         napi_value result = nullptr;
-        napi_get_boolean(env, false, &result);
+        if (returnEffect)
+            napi_create_int32(env, effect, &result);
+        else
+            napi_get_boolean(env, effect != 0, &result);
         return result;
     };
     size_t count = 7;
@@ -764,19 +860,20 @@ napi_value Drag(napi_env env, napi_callback_info info)
         napi_get_value_int32(env, args[5], &formats) != napi_ok ||
         napi_get_value_string_utf8(env, args[6], nullptr, 0, &length) != napi_ok ||
         length > 1'048'576 || (phase != 3 && length != 0))
-        return rejected();
+        return response(0);
 
     std::string payload(length + 1, 0);
     if (length != 0 && napi_get_value_string_utf8(env, args[6], payload.data(), payload.size(), &length) != napi_ok)
-        return rejected();
+        return response(0);
     const auto token = SurfaceToken(surfaceId);
-    const bool accepted = token != 0 && App().drag != nullptr &&
-        App().drag(token, phase, x, y, modifiers, formats, payload.data(), static_cast<int32_t>(length)) != 0;
-
-    napi_value result = nullptr;
-    napi_get_boolean(env, accepted, &result);
-    return result;
+    const auto effect = token != 0 && App().drag != nullptr
+        ? App().drag(token, phase, x, y, modifiers, formats, payload.data(), static_cast<int32_t>(length)) : 0;
+    return response(effect);
 }
+
+napi_value Drag(napi_env env, napi_callback_info info) { return DispatchDrag(env, info, false); }
+
+napi_value DragEffect(napi_env env, napi_callback_info info) { return DispatchDrag(env, info, true); }
 
 bool WaitAndCloseFence(int fence)
 {
@@ -828,6 +925,7 @@ napi_value Init(napi_env env, napi_value exports)
             napi_default, nullptr},
         {"setLifecycle", nullptr, SetLifecycle, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setTheme", nullptr, SetTheme, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setAccent", nullptr, SetAccent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"refreshDisplays", nullptr, RefreshDisplays, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"startDisplayObservation", nullptr, StartDisplayObservation, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stopDisplayObservation", nullptr, StopDisplayObservation, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -840,6 +938,9 @@ napi_value Init(napi_env env, napi_value exports)
         {"clearWindowInsets", nullptr, ClearWindowInsets, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportChildFrame", nullptr, ReportChildFrame, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportChildEvent", nullptr, ReportChildEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"supportsTitleBar", nullptr, SupportsTitleBar, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"reportTitleBar", nullptr, ReportTitleBar, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"titleBarPress", nullptr, TitleBarPress, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportTrayEvent", nullptr, ReportTrayEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestChildClose", nullptr, RequestChildClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestBack", nullptr, RequestBack, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -851,7 +952,8 @@ napi_value Init(napi_env env, napi_value exports)
         {"pointer", nullptr, Pointer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"key", nullptr, Key, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"inputBlur", nullptr, InputBlur, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"drag", nullptr, Drag, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"drag", nullptr, Drag, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"dragEffect", nullptr, DragEffect, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     if (napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties) != napi_ok)
         return Error(env, "Could not export the Avalonia OpenHarmony bridge.");

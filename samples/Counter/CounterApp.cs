@@ -129,8 +129,10 @@ public sealed partial class CounterApp : Application
             var dropTarget = CounterDropTarget.Create(editor, ReportStatus);
 #if OHOS
             var dragSource = CreateTextDragSource(ReportStatus);
+            var (dragCoverage, dragCoverageTargets) = CreateDragCoverage(ReportStatus);
             var (bitmapCursor, hiddenCursor) = CreateCursorTargets();
             var (trayPanel, trayTargets) = CreateTrayControls();
+            var coverage = new Button { Content = "Backend checks" };
 #endif
             var content = new StackPanel
             {
@@ -144,12 +146,22 @@ public sealed partial class CounterApp : Application
                     dropTarget,
 #if OHOS
                     dragSource,
+                    dragCoverage,
 #endif
                     picker,
 #if OHOS
                     new WrapPanel { Children = { bitmapCursor, hiddenCursor } },
 #endif
-                    new WrapPanel { Children = { copy, open, save, folder, link, immersive } },
+                    new WrapPanel
+                    {
+                        Children =
+                        {
+                            copy, open, save, folder, link, immersive,
+#if OHOS
+                            coverage
+#endif
+                        }
+                    },
                     status
                 }
             };
@@ -164,9 +176,22 @@ public sealed partial class CounterApp : Application
 #if OHOS
             content.Children.Add(trayPanel);
 #endif
+            var scroller = new ScrollViewer { Content = content };
+#if OHOS
+            Control? coveragePage = null;
+            coverage.Click += (_, _) =>
+            {
+                scroller.Content = coveragePage ??= CreateBackendCoverage(() =>
+                {
+                    scroller.Content = content;
+                    scroller.Offset = default;
+                });
+                scroller.Offset = default;
+            };
+#endif
             var border = new Border
             {
-                Child = new ScrollViewer { Content = content },
+                Child = scroller,
                 Padding = new Thickness(24)
             };
             border[!Border.BackgroundProperty] = new DynamicResourceExtension("ThemeBackgroundBrush");
@@ -177,6 +202,8 @@ public sealed partial class CounterApp : Application
                 ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link),
 #if OHOS
                 ("Drag source", dragSource), ("Bitmap cursor", bitmapCursor), ("Hidden cursor", hiddenCursor),
+                .. dragCoverageTargets,
+                ("Backend checks", coverage),
                 .. nativeControlTargets,
                 .. trayTargets,
 #endif
@@ -185,42 +212,16 @@ public sealed partial class CounterApp : Application
                 .. windowTargets
 #endif
             ]);
+#if OHOS_COUNTER_WINDOWS
+            var surface = new Border { Child = WithCustomTitleBar(border) };
+#else
             var surface = new Border { Child = border };
+#endif
             TopLevel.SetAutoSafeAreaPadding(surface, true);
             lifetime.MainView = surface;
         }
         base.OnFrameworkInitializationCompleted();
     }
-
-#if OHOS
-    private static Control CreateTextDragSource(Action<string> report)
-    {
-        var label = new TextBlock
-        {
-            Text = "Drag Avalonia sample text",
-            Margin = new Thickness(12),
-            Foreground = Avalonia.Media.Brushes.White
-        };
-        var source = new Border
-        {
-            Background = Avalonia.Media.Brushes.RoyalBlue,
-            Child = label,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            CornerRadius = new CornerRadius(6)
-        };
-        source.PointerPressed += async (_, args) =>
-        {
-            if (args.Pointer.Type != PointerType.Touch)
-                return;
-            args.Handled = true;
-            var data = new DataTransfer();
-            data.Add(DataTransferItem.CreateText(SampleText));
-            var result = await DragDrop.DoDragDropAsync(args, data, DragDropEffects.Copy);
-            report(result == DragDropEffects.Copy ? "Sample text dragged: Copy" : "Sample text drag canceled");
-        };
-        return source;
-    }
-#endif
 
     private static void ObserveTopLevel(Control content, params (string Name, Control Element)[] targets)
     {
@@ -290,7 +291,8 @@ public sealed partial class CounterApp : Application
         };
         void ReportPositions()
         {
-            if (current is null || targets.Any(target => target.Element.Bounds.Width <= 0))
+            if (current is null || targets.Any(target => target.Element.Bounds.Width <= 0 ||
+                TopLevel.GetTopLevel(target.Element) != current))
                 return;
             var positions = string.Join(" | ", targets.Select(target =>
             {

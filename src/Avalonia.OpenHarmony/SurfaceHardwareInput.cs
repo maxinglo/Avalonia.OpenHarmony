@@ -15,7 +15,7 @@ internal sealed partial class SurfaceTopLevel
     private RawInputModifiers _pressedMouseButtons;
 
     internal void HardwarePointer(int phase, int button, double x, double y, double wheelX, double wheelY,
-        RawInputModifiers modifiers)
+        RawInputModifiers modifiers, long dragGesture = 0)
     {
         if (_inputRoot is not { } root || !double.IsFinite(x) || !double.IsFinite(y))
             return;
@@ -41,7 +41,10 @@ internal sealed partial class SurfaceTopLevel
             CancelHardwarePointer();
         if (type != RawPointerEventType.LeaveWindow)
             _pressedMouseButtons = buttons;
-        Input?.Invoke(new RawPointerEventArgs(_mouse, timestamp, root, type, position, modifiers));
+        var input = new RawPointerEventArgs(_mouse, timestamp, root, type, position, modifiers);
+        if (type == RawPointerEventType.LeftButtonDown && dragGesture < 0)
+            input.PlatformInputEventCookie = new OpenHarmonyTextDragGesture(dragGesture);
+        Input?.Invoke(input);
         if (type == RawPointerEventType.LeaveWindow)
             _cursorController?.Invalidate();
         else

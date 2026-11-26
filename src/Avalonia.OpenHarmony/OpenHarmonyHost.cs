@@ -60,7 +60,7 @@ public sealed partial class OpenHarmonyHost
 
     public OpenHarmonyHost(Func<AppBuilder> configure, PresentFrame present, Action<string> reportError,
         Func<int>? getInputWindowId, PlatformThemeVariant initialTheme, ILauncher? launcher,
-        IStorageProvider? storageProvider)
+        IStorageProvider? storageProvider, uint? initialAccent = null)
     {
         ArgumentNullException.ThrowIfNull(configure);
         _present = present ?? throw new ArgumentNullException(nameof(present));
@@ -68,7 +68,7 @@ public sealed partial class OpenHarmonyHost
         _getInputWindowId = getInputWindowId;
         _launcher = launcher;
         _storageProvider = storageProvider;
-        _settings = new OpenHarmonyPlatformSettings(initialTheme);
+        _settings = new OpenHarmonyPlatformSettings(initialTheme, initialAccent);
         new Thread(() => Run(configure))
         {
             IsBackground = true,
@@ -209,11 +209,28 @@ public sealed partial class OpenHarmonyHost
     public void Touch(long surface, long contact, TouchPhase phase, double x, double y) =>
         Post(() => FindInputSurface(surface)?.Touch(contact, phase, x, y));
 
+    /// <summary>Queues touch or pen input with the physical position and ArkUI pointer details.</summary>
+    public void Touch(long surface, long contact, TouchPhase phase, double x, double y, bool pen, int modifiers,
+        double pressure, double tiltX, double tiltY) => Post(() =>
+    {
+        if (FindInputSurface(surface) is not { } target)
+            return;
+        if (pen)
+            target.Pen(contact, phase, x, y, (RawInputModifiers)modifiers, pressure, tiltX, tiltY);
+        else if (phase <= TouchPhase.Cancel)
+            target.Touch(contact, phase, x, y, (RawInputModifiers)modifiers);
+    });
+
     /// <summary>Queues hardware pointer input. Position is in physical pixels and wheel deltas are in Avalonia wheel units.</summary>
     public void HardwarePointer(long surface, int phase, int button, double x, double y,
         double wheelX, double wheelY, int modifiers) =>
+        HardwarePointer(surface, phase, button, x, y, wheelX, wheelY, modifiers, 0);
+
+    /// <summary>Queues hardware pointer input with an ArkUI primary mouse-press drag token when available.</summary>
+    public void HardwarePointer(long surface, int phase, int button, double x, double y,
+        double wheelX, double wheelY, int modifiers, long dragGesture) =>
         Post(() => FindInputSurface(surface)?.HardwarePointer(phase, button, x, y, wheelX, wheelY,
-            (RawInputModifiers)modifiers));
+            (RawInputModifiers)modifiers, dragGesture));
 
     /// <summary>Queues an ArkUI hardware key and reports whether its key code or printable text is supported.</summary>
     public bool HardwareKey(long surface, bool down, int keyCode, int modifiers, int unicode, int locks)
@@ -235,6 +252,7 @@ public sealed partial class OpenHarmonyHost
             if (target is null)
                 return;
             target.CancelHardwarePointer();
+            target.CancelPenInput();
             if (_root is { } root && target == _topLevel)
                 root.FocusManager.Focus(null);
             else
@@ -297,7 +315,7 @@ public sealed partial class OpenHarmonyHost
         locator.Bind<IKeyboardDevice>().ToSingleton<KeyboardDevice>();
         locator.Bind<PlatformHotkeyConfiguration>().ToSingleton<PlatformHotkeyConfiguration>();
         if (locator.GetService<OpenHarmonyTextDragOptions>() is { } textDrag)
-            locator.Bind<IPlatformDragSource>().ToConstant(new OpenHarmonyTextDragSource(textDrag.Request, _reportError));
+            locator.Bind<IPlatformDragSource>().ToConstant(new OpenHarmonyTextDragSource(textDrag, _reportError));
         locator.Bind<ICursorFactory>().ToSingleton<OpenHarmonyCursorFactory>();
         locator.Bind<IPlatformIconLoader>().ToSingleton<OpenHarmonyIconLoader>();
         _renderTimer = new OpenHarmonyRenderTimer(Dispatcher.UIThread, _reportError);
@@ -305,7 +323,16 @@ public sealed partial class OpenHarmonyHost
         locator.Bind<IWindowingPlatform>().ToConstant(new OpenHarmonyChildWindowingPlatform(CreateOwnedWindow,
             () => _topLevel ?? throw new InvalidOperationException("The XComponent surface is not available."),
             CreateTrayIcon));
-        locator.Bind<IPlatformGraphics?>().ToFunc(() => _topLevel is { UsesEgl: true } ? _egl?.Graphics : null);
+        var windowedEgl = locator.GetService<OpenHarmonyWindowOptions>() is not null &&
+            locator.GetService<OpenHarmonyRenderingOptions>()?.UseEgl == true;
+        if (windowedEgl)
+        {
+            var skia = locator.GetRequiredService<IPlatformRenderInterface>();
+            locator.Bind<IPlatformRenderInterface>().ToConstant(new OpenHarmonyWindowedSkia(skia));
+        }
+        locator.Bind<IPlatformGraphics?>().ToFunc(() => windowedEgl
+            ? _windowedGraphics is { Enabled: true } ? _egl?.Graphics : null
+            : _topLevel is { UsesEgl: true } ? _egl?.Graphics : null);
         locator.Bind<Compositor>().ToConstant(new Compositor(null));
     }
 
@@ -369,5 +396,7 @@ public enum TouchPhase
     Begin,
     Move,
     End,
-    Cancel
+    Cancel,
+    PenHover,
+    PenLeave
 }

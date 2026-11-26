@@ -3,6 +3,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.OpenHarmony;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 
 var errors = new ConcurrentQueue<string>();
@@ -21,7 +22,8 @@ var options = new OpenHarmonyTrayOptions
         var state = data.RootElement;
         var visible = state.GetProperty("visible").GetBoolean();
         updates.Add(new(long.Parse(state.GetProperty("id").GetString()!), visible,
-            visible ? state.GetProperty("toolTip").GetString() : null));
+            visible ? state.GetProperty("toolTip").GetString() : null,
+            visible ? state.GetProperty("menu").GetString() : null));
         if (updates.Count == 1)
             return firstShow.Task;
         return Task.FromResult(!visible && failHide ? default : accepted);
@@ -63,13 +65,37 @@ await Dispatcher.UIThread.InvokeAsync(async () =>
     await Flush();
     await Flush();
     Check(updates.Count == 4 && updates[3] == updates[2], "A new stage did not recover the icon state.");
+    using var iconStream = new MemoryStream(Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="));
+    using var icon = new Bitmap(iconStream);
+    var item = new NativeMenuItem("Icon") { Icon = icon };
+    var selected = 0;
+    item.Click += (_, _) => selected++;
+    replacement.Menu = new NativeMenu { Items = { item } };
+    await Flush();
+    await Flush();
+    using (var menu = JsonDocument.Parse(updates[^1].Menu!))
+    {
+        var entry = menu.RootElement[0][0];
+        Check(Convert.FromBase64String(entry.GetProperty("icon").GetString()!).Length > 0,
+            "The menu icon was not encoded.");
+        host.ReportTrayEvent(updates[^1].Id, entry.GetProperty("code").GetString()!);
+    }
+    await Flush();
+    Check(selected == 1, "The menu action did not reach Avalonia.");
+    item.Icon = null;
+    await Flush();
+    await Flush();
+    using (var menu = JsonDocument.Parse(updates[^1].Menu!))
+        Check(!menu.RootElement[0][0].TryGetProperty("icon", out _), "The removed menu icon remained published.");
+    var beforeHide = updates.Count;
     failHide = true;
     replacement.IsVisible = false;
     await Flush();
     Check(errors.Count == 1, "A failed hide was not reported.");
     failHide = false;
     TrayIcon.SetIcons(app, null);
-    Check(updates.Count == 6 && updates[4] == updates[5] && !updates[5].Visible,
+    Check(updates.Count == beforeHide + 2 && updates[^2] == updates[^1] && !updates[^1].Visible,
         "Disposal did not retry removal of the possibly active native icon.");
 }).WaitAsync(TimeSpan.FromSeconds(10));
 Check(errors.TryDequeue(out var failure) && failure == "OpenHarmony could not remove the status bar item." && errors.IsEmpty,
@@ -84,4 +110,4 @@ static void Check(bool condition, string message)
         throw new InvalidOperationException(message);
 }
 
-internal sealed record TrayState(long Id, bool Visible, string? ToolTip);
+internal sealed record TrayState(long Id, bool Visible, string? ToolTip, string? Menu);

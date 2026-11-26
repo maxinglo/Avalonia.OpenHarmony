@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
 
@@ -63,6 +64,9 @@ public sealed partial class OpenHarmonyHost
 
     /// <summary>Reports the platform theme and notifies Avalonia when it changes.</summary>
     public void SetTheme(PlatformThemeVariant theme) => Post(() => _settings.SetTheme(theme));
+
+    /// <summary>Reports the system emphasis color as ARGB.</summary>
+    public void SetAccent(uint argb) => Post(() => _settings.SetAccent(argb));
 
     /// <summary>Replaces the device's current display list.</summary>
     public void UpdateDisplays(IReadOnlyList<OpenHarmonyDisplayInfo> displays)
@@ -237,17 +241,43 @@ public sealed partial class OpenHarmonyHost
     }
 }
 
-internal sealed class OpenHarmonyPlatformSettings(PlatformThemeVariant initialTheme) : DefaultPlatformSettings
+internal sealed class OpenHarmonyPlatformSettings(PlatformThemeVariant initialTheme, uint? initialAccent) : DefaultPlatformSettings
 {
-    private volatile PlatformThemeVariant _theme = initialTheme;
+    private readonly object _lock = new();
+    private PlatformThemeVariant _theme = initialTheme;
+    private uint? _accent = initialAccent;
 
-    public override PlatformColorValues GetColorValues() => new() { ThemeVariant = _theme };
+    public override PlatformColorValues GetColorValues()
+    {
+        lock (_lock)
+        {
+            if (_accent is not { } accent)
+                return new PlatformColorValues { ThemeVariant = _theme };
+            var color = Color.FromUInt32(accent);
+            return new PlatformColorValues { ThemeVariant = _theme, AccentColor1 = color,
+                AccentColor2 = color, AccentColor3 = color };
+        }
+    }
 
     public void SetTheme(PlatformThemeVariant theme)
     {
-        if (_theme == theme)
-            return;
-        _theme = theme;
+        lock (_lock)
+        {
+            if (_theme == theme)
+                return;
+            _theme = theme;
+        }
+        OnColorValuesChanged(GetColorValues());
+    }
+
+    public void SetAccent(uint accent)
+    {
+        lock (_lock)
+        {
+            if (_accent == accent)
+                return;
+            _accent = accent;
+        }
         OnColorValuesChanged(GetColorValues());
     }
 }

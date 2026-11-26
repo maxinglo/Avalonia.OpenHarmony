@@ -20,6 +20,13 @@ The committed `TextBox.Text` and its data bindings retain their original value w
   The override uses .NET 9's `UnsafeAccessor` for Avalonia's binding stop method.
   Keep the Windows probe in the upgrade checks for future Avalonia versions.
 
+The native editor routes Select All, Cut, Copy and Paste to the focused Avalonia
+client. Cut requires a selection in an editable control. Copy and Cut honor password and
+PIN privacy. Paste uses HarmonyOS clipboard authorization. Input type, enter action and
+the placeholder travel through the native text configuration. HarmonyOS exposes no
+corresponding setters for Avalonia's suggestion, casing, capitalization or locale
+preferences. Private commands require an agreed IME and application protocol.
+
 The [HarmonyOS IME text editor callback API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/capi-inputmethod-text-editor-proxy-capi-h/)
 defines the native surface. The [input method engine API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-inputmethodengine/)
 defines the range rules. The [ArkUI text field implementation](https://github.com/openharmony/arkui_ace_engine/blob/master/frameworks/core/components_ng/pattern/text_field/text_field_pattern.cpp)
@@ -40,7 +47,7 @@ dotnet run --project tests/ImePreeditProbe/ImeProbe.csproj -- "$out/mock.dll"
 The mock invokes the native ABI while the real Avalonia host renders a SimpleTheme `TextBox`
 on Windows. Checks cover focus and attach, regular Unicode text edits, replacement rendering and
 caret positions, range validation, one-time commit, undo and redo, reset and empty previews,
-password fields, and a two-way model updated externally during preedit.
+password fields, clipboard editor actions, and a two-way model updated externally during preedit.
 
 ## HarmonyOS device check
 

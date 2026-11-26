@@ -26,7 +26,7 @@ export default class EntryAbility extends UIAbility {
         stopRequests();
       };
       bridge.reportTrayEvent(0n, '');
-      updateTheme(this.context.config);
+      updateTheme(this.context.config, this.context);
       this.configured = true;
       if (this.foreground !== undefined) {
         this.reportForeground(this.foreground);
@@ -65,7 +65,7 @@ export default class EntryAbility extends UIAbility {
 
   onConfigurationUpdate(config: Configuration): void {
     if (this.configured) {
-      updateTheme(config);
+      updateTheme(config, this.context);
     }
   }
 

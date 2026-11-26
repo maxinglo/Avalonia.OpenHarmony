@@ -8,21 +8,27 @@ namespace Avalonia.OpenHarmony;
 
 public sealed partial class OpenHarmonyHost
 {
+    private const int AllowTextMove = 16;
     private (long Token, SurfaceTopLevel? Surface) _inboundDrag;
 
     /// <summary>Delivers system drag events and returns the Avalonia destination's acceptance of a Copy.</summary>
     public bool ReceiveDrag(long surface, int phase, double physicalX, double physicalY, int modifiers, int formats,
-        string payload)
+        string payload) => ReceiveDragEffect(surface, phase, physicalX, physicalY, modifiers, formats & ~AllowTextMove,
+        payload) == DragDropEffects.Copy;
+
+    /// <summary>Delivers system drag events and returns the Avalonia destination's chosen drop effect.</summary>
+    public DragDropEffects ReceiveDragEffect(long surface, int phase, double physicalX, double physicalY,
+        int modifiers, int formats, string payload)
     {
         if (surface <= 0 || phase is < 0 or > 3 || !double.IsFinite(physicalX) || !double.IsFinite(physicalY) ||
             payload.Length > 1_048_576)
-            return false;
+            return DragDropEffects.None;
 
         Dispatcher? dispatcher;
         lock (_dispatchLock)
             dispatcher = _stopped ? null : _dispatcher;
         if (dispatcher is null)
-            return false;
+            return DragDropEffects.None;
 
         var type = (RawDragEventType)phase;
         if (type == RawDragEventType.DragLeave)
@@ -31,11 +37,12 @@ public sealed partial class OpenHarmonyHost
                 CancelInboundDrag(surface);
             else
                 Post(() => CancelInboundDrag(surface));
-            return false;
+            return DragDropEffects.None;
         }
 
-        bool DispatchDrag() => DispatchInboundDrag(surface, type, physicalX, physicalY,
-            (RawInputModifiers)modifiers & RawInputModifiers.KeyboardMask, formats, payload);
+        DragDropEffects DispatchDrag() => DispatchInboundDrag(surface, type, physicalX, physicalY,
+            (RawInputModifiers)modifiers & RawInputModifiers.KeyboardMask, formats & ~AllowTextMove, payload,
+            (formats & AllowTextMove) != 0);
 
         try
         {
@@ -50,22 +57,22 @@ public sealed partial class OpenHarmonyHost
         }
         catch (OperationCanceledException)
         {
-            return false;
+            return DragDropEffects.None;
         }
         catch (Exception error)
         {
             _reportError(error.ToString());
-            return false;
+            return DragDropEffects.None;
         }
     }
 
-    private bool DispatchInboundDrag(long token, RawDragEventType type, double x, double y,
-        RawInputModifiers modifiers, int formats, string payload)
+    private DragDropEffects DispatchInboundDrag(long token, RawDragEventType type, double x, double y,
+        RawInputModifiers modifiers, int formats, string payload, bool allowTextMove)
     {
         if (FindDragReceiver(token) is not { } destination)
         {
             CancelInboundDrag(token);
-            return false;
+            return DragDropEffects.None;
         }
 
         if (_inboundDrag.Token != token || type == RawDragEventType.DragEnter)
@@ -74,7 +81,7 @@ public sealed partial class OpenHarmonyHost
 
         try
         {
-            return destination.ReceiveDrag(type, x, y, modifiers, formats, payload);
+            return destination.ReceiveDrag(type, x, y, modifiers, formats, payload, allowTextMove);
         }
         catch
         {
@@ -110,17 +117,19 @@ internal sealed partial class SurfaceTopLevel
 {
     private const int PlainTextOffer = 1;
     private const int FileOffer = 2;
+    private const int HtmlOffer = 4;
+    private const int HyperlinkOffer = 8;
     private const int MaximumDropItems = 32;
     private readonly DragDropDevice _dragDevice = new();
     private Point _lastDragPosition;
     private RawInputModifiers _lastDragModifiers;
     private bool _dragInProgress;
 
-    internal bool ReceiveDrag(RawDragEventType type, double x, double y, RawInputModifiers modifiers, int formats,
-        string payload)
+    internal DragDropEffects ReceiveDrag(RawDragEventType type, double x, double y, RawInputModifiers modifiers,
+        int formats, string payload, bool allowTextMove)
     {
         if (_inputRoot is not { } root || Input is not { } process)
-            return false;
+            return DragDropEffects.None;
 
         var position = new Point(x / RenderScaling, y / RenderScaling);
         _lastDragPosition = position;
@@ -130,8 +139,7 @@ internal sealed partial class SurfaceTopLevel
         if (type != RawDragEventType.Drop)
         {
             using var offered = new OfferedTransfer(formats, storage is not null);
-            var proposed = offered.Formats.Count == 0 ? DragDropEffects.None : DragDropEffects.Copy;
-            return Dispatch(type, offered, proposed) && proposed == DragDropEffects.Copy;
+            return Dispatch(type, offered, Propose(formats, offered.Formats.Count > 0, allowTextMove));
         }
 
         using var received = new DataTransfer();
@@ -140,18 +148,22 @@ internal sealed partial class SurfaceTopLevel
         try
         {
             if (!ReadPayload(payload, storage, received, ownedFiles) || received.Items.Count == 0)
-                return false;
+                return DragDropEffects.None;
 
             var actualFormats = (received.Formats.Contains(DataFormat.Text) ? PlainTextOffer : 0) |
-                (received.Formats.Contains(DataFormat.File) ? FileOffer : 0);
+                (received.Formats.Contains(DataFormat.File) ? FileOffer : 0) |
+                (received.Formats.Contains(OpenHarmonyDragFormats.Html) ? HtmlOffer : 0) |
+                (received.Formats.Contains(OpenHarmonyDragFormats.UriList) ? HyperlinkOffer : 0);
             using var offered = new OfferedTransfer(actualFormats, storage is not null);
+            var proposed = Propose(actualFormats | (formats & FileOffer), true, allowTextMove);
             // Some systems dispatch Drop without a final motion event. Keep payloads private until Drop.
-            if (!Dispatch(RawDragEventType.DragOver, offered, DragDropEffects.Copy))
-                return false;
+            if (Dispatch(RawDragEventType.DragOver, offered, proposed) == DragDropEffects.None)
+                return DragDropEffects.None;
 
             _dragInProgress = false;
-            accepted = Dispatch(RawDragEventType.Drop, received, DragDropEffects.Copy);
-            return accepted;
+            var effect = Dispatch(RawDragEventType.Drop, received, proposed);
+            accepted = effect != DragDropEffects.None;
+            return effect;
         }
         finally
         {
@@ -160,12 +172,22 @@ internal sealed partial class SurfaceTopLevel
                     file.Dispose();
         }
 
-        bool Dispatch(RawDragEventType eventType, IDataTransfer transfer, DragDropEffects proposed)
+        DragDropEffects Dispatch(RawDragEventType eventType, IDataTransfer transfer, DragDropEffects proposed)
         {
             var drag = new RawDragEvent(_dragDevice, eventType, root, position, transfer, proposed, modifiers);
             process(drag);
-            return (drag.Effects & DragDropEffects.Copy) == DragDropEffects.Copy;
+            var requested = drag.Effects & proposed;
+            return (requested & DragDropEffects.Copy) != 0 ? DragDropEffects.Copy : requested & DragDropEffects.Move;
         }
+    }
+
+    private static DragDropEffects Propose(int formats, bool hasData, bool allowTextMove)
+    {
+        if (!hasData)
+            return DragDropEffects.None;
+        return allowTextMove && (formats & FileOffer) == 0
+            ? DragDropEffects.Copy | DragDropEffects.Move
+            : DragDropEffects.Copy;
     }
 
     internal void CancelInboundDrag()
@@ -197,8 +219,18 @@ internal sealed partial class SurfaceTopLevel
         {
             using var document = JsonDocument.Parse(payload);
             var data = document.RootElement;
-            if (data.ValueKind != JsonValueKind.Object ||
-                !data.TryGetProperty("texts", out var texts) || texts.ValueKind != JsonValueKind.Array ||
+            if (data.ValueKind != JsonValueKind.Object)
+                return false;
+            if (data.TryGetProperty("items", out var items))
+            {
+                if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() > MaximumDropItems)
+                    return false;
+                foreach (var record in items.EnumerateArray())
+                    AddItem(record, storage, transfer, ownedFiles);
+                return true;
+            }
+
+            if (!data.TryGetProperty("texts", out var texts) || texts.ValueKind != JsonValueKind.Array ||
                 !data.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array ||
                 texts.GetArrayLength() + files.GetArrayLength() > MaximumDropItems)
                 return false;
@@ -232,15 +264,54 @@ internal sealed partial class SurfaceTopLevel
         }
     }
 
+    private static void AddItem(JsonElement record, OpenHarmonyStorageProvider? storage, DataTransfer transfer,
+        List<IStorageFile> ownedFiles)
+    {
+        if (record.ValueKind != JsonValueKind.Object)
+            return;
+
+        var item = new DataTransferItem();
+        if (record.TryGetProperty("file", out var file))
+        {
+            if (storage is null || file.ValueKind != JsonValueKind.Object || ReadString(file, "uri") is not { } uri ||
+                !file.TryGetProperty("descriptor", out var descriptor) || descriptor.ValueKind != JsonValueKind.Number ||
+                !descriptor.TryGetInt32(out var fd) ||
+                !file.TryGetProperty("length", out var length) || length.ValueKind != JsonValueKind.Number ||
+                !length.TryGetUInt64(out var size))
+                return;
+
+            var writable = file.TryGetProperty("writable", out var access) && access.ValueKind == JsonValueKind.True;
+            if (storage.RetainDroppedFile(uri, fd, size, writable) is not { } retained)
+                return;
+            ownedFiles.Add(retained);
+            item.Set(DataFormat.File, retained);
+        }
+        if (ReadString(record, "text") is { } text)
+            item.Set(DataFormat.Text, text);
+        if (ReadString(record, "html") is { } html)
+            item.Set(OpenHarmonyDragFormats.Html, html);
+        if (ReadString(record, "link") is { } link && OpenHarmonyDragFormats.IsWebLink(link))
+            item.Set(OpenHarmonyDragFormats.UriList, link);
+        if (item.Formats.Count > 0)
+            transfer.Add(item);
+    }
+
+    private static string? ReadString(JsonElement record, string key) =>
+        record.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
     private sealed class OfferedTransfer : IDataTransfer, IDataTransferItem
     {
         public OfferedTransfer(int formats, bool supportsFiles)
         {
-            var offered = new List<DataFormat>(2);
+            var offered = new List<DataFormat>(4);
             if ((formats & PlainTextOffer) != 0)
                 offered.Add(DataFormat.Text);
             if (supportsFiles && (formats & FileOffer) != 0)
                 offered.Add(DataFormat.File);
+            if ((formats & HtmlOffer) != 0)
+                offered.Add(OpenHarmonyDragFormats.Html);
+            if ((formats & HyperlinkOffer) != 0)
+                offered.Add(OpenHarmonyDragFormats.UriList);
             Formats = offered;
             Items = offered.Count == 0 ? [] : [this];
         }

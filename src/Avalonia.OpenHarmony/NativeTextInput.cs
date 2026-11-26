@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Data;
 using Avalonia.Data.Core;
@@ -16,6 +17,7 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
     private const int InvalidPreviewRange = 401;
     private const int PreviewNotSupported = 12800011;
     private const int MaximumTextLength = 1_048_576;
+    private const int MaximumPlaceholderLength = 255;
     private static readonly ConcurrentDictionary<nint, Session> Sessions = new();
     private readonly Dispatcher _dispatcher = Dispatcher.UIThread;
     private readonly SurfaceTopLevel _surface;
@@ -24,7 +26,9 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
     private readonly OpenHarmonyInputDiagnostics? _diagnostics =
         AvaloniaLocator.Current.GetService<OpenHarmonyInputDiagnostics>();
     private TextInputMethodClient? _client;
+    private StyledElement? _focusedControl;
     private TextInputOptions _options = TextInputOptions.Default;
+    private TextInputOptions _nextOptions = TextInputOptions.Default;
     private Session? _session;
     private PreviewComposition? _preview;
     private PreviewDisplay? _previewDisplay;
@@ -40,22 +44,30 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
 
     public void SetClient(TextInputMethodClient? client)
     {
-        if (_disposed || ReferenceEquals(_client, client))
+        if (_disposed)
+            return;
+        var focusedControl = client is null ? null : GetFocusedControl();
+        if (ReferenceEquals(_client, client) && ReferenceEquals(_focusedControl, focusedControl))
             return;
         CancelAttachRequest();
+        if (_focusedControl is { } previousControl)
+            previousControl.PropertyChanged -= OnFocusedControlPropertyChanged;
         if (_client is { } previous)
         {
             previous.SelectionChanged -= UpdateSelection;
             previous.SurroundingTextChanged -= UpdateSelection;
             previous.TextViewVisualChanged -= UpdateSelection;
             previous.InputPaneActivationRequested -= ShowKeyboard;
-            ClearPreview(previous);
             Detach();
         }
         _client = client;
+        _focusedControl = focusedControl;
+        _options = _nextOptions;
         if (client is null)
             return;
 
+        if (focusedControl is not null)
+            focusedControl.PropertyChanged += OnFocusedControlPropertyChanged;
         client.SelectionChanged += UpdateSelection;
         client.SurroundingTextChanged += UpdateSelection;
         client.TextViewVisualChanged += UpdateSelection;
@@ -73,13 +85,29 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
 
     public void SetOptions(TextInputOptions options)
     {
-        _options = options;
-        if (_client is { } client && IsSensitive(client))
+        // Avalonia sets the incoming control's options before swapping the focused client.
+        _nextOptions = options;
+        if (_client is { } client && ReferenceEquals(_focusedControl, GetFocusedControl()))
         {
-            ClearPreview(client);
-            if (_session is { } session)
-                CaptureSelection(session);
+            _options = options;
+            RefreshConfiguration(client);
         }
+    }
+
+    private StyledElement? GetFocusedControl() => _surface.ControlRoot?.FocusManager?.GetFocusedElement() as StyledElement;
+
+    private void OnFocusedControlPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs change)
+    {
+        if (_client is not { } client || _focusedControl is not { } control || !ReferenceEquals(control, GetFocusedControl()))
+            return;
+
+        var property = change.Property;
+        if (property == TextInputOptions.ContentTypeProperty || property == TextInputOptions.ReturnKeyTypeProperty ||
+            property == TextInputOptions.MultilineProperty || property == TextInputOptions.IsSensitiveProperty)
+            SetOptions(TextInputOptions.FromStyledElement(control));
+        else if (property == TextBox.AcceptsReturnProperty || property == TextBox.IsReadOnlyProperty ||
+                 property == TextBox.PasswordCharProperty || property == TextBox.PlaceholderTextProperty)
+            RefreshConfiguration(client);
     }
 
     public void Reset()
@@ -158,6 +186,8 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
 
     private void Detach()
     {
+        if (_client is { } client)
+            ClearPreview(client);
         if (_session is not { } session)
             return;
         _session = null;
@@ -202,6 +232,37 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         }
     }
 
+    private void RefreshConfiguration(TextInputMethodClient client)
+    {
+        if (_session is not { } session)
+            return;
+
+        var previous = session.Snapshot;
+        var sensitive = IsSensitive(client);
+        if (sensitive || _focusedControl is TextBox { IsReadOnly: true })
+            ClearPreview(client);
+
+        if (_preview is null)
+            CaptureSelection(session);
+        else
+            session.Snapshot = previous with
+            {
+                InputType = GetInputType(sensitive),
+                EnterKey = GetEnterKey(),
+                Placeholder = GetPlaceholder(sensitive)
+            };
+
+        var current = session.Snapshot;
+        if (current.InputType != previous.InputType || current.EnterKey != previous.EnterKey)
+        {
+            var result = InputMethodApi.OH_InputMethodProxy_NotifyConfigurationChange(session.Proxy, current.EnterKey, current.InputType);
+            if (result != 0)
+                _reportError($"OH_InputMethodProxy_NotifyConfigurationChange returned HarmonyOS input method error {result}.");
+        }
+        if (current.Text != previous.Text || current.Start != previous.Start || current.End != previous.End)
+            NotifySelection(session);
+    }
+
     private void CaptureSelection(Session session)
     {
         var client = _client;
@@ -212,12 +273,15 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         var first = Math.Clamp(Math.Min(range.Start, range.End), 0, text.Length);
         var last = Math.Clamp(Math.Max(range.Start, range.End), 0, text.Length);
         var caret = Math.Clamp(range.End, 0, text.Length);
-        var canPreview = sendContext && client is { SupportsPreedit: true, TextViewVisual: TextPresenter };
-        session.Snapshot = new(text, first, last, caret, GetInputType(), GetEnterKey(), canPreview, sensitive);
+        var canPreview = sendContext && _focusedControl is not TextBox { IsReadOnly: true } &&
+                         client is { SupportsPreedit: true, TextViewVisual: TextPresenter };
+        session.Snapshot = new(text, first, last, caret, GetInputType(sensitive), GetEnterKey(),
+            GetPlaceholder(sensitive), canPreview, sensitive);
     }
 
     private bool IsSensitive(TextInputMethodClient client) =>
         _options.IsSensitive || _options.ContentType is TextInputContentType.Password or TextInputContentType.Pin ||
+        _focusedControl is TextBox { PasswordChar: not '\0' } ||
         client.TextViewVisual is TextPresenter { PasswordChar: not '\0' };
 
     private static void NotifySelection(Session session)
@@ -278,15 +342,18 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         _surface.PressKey(key);
     }
 
-    private EditorType GetInputType() => _options.ContentType switch
+    private bool IsMultiline => _options.Multiline || _focusedControl is TextBox { AcceptsReturn: true };
+
+    private EditorType GetInputType(bool sensitive) => _options.ContentType switch
     {
-        TextInputContentType.Digits => EditorType.Number,
         TextInputContentType.Pin => EditorType.NumberPassword,
+        TextInputContentType.Digits when sensitive => EditorType.NumberPassword,
+        _ when sensitive => EditorType.Password,
+        TextInputContentType.Digits => EditorType.Number,
         TextInputContentType.Number => EditorType.Decimal,
         TextInputContentType.Email => EditorType.Email,
         TextInputContentType.Url => EditorType.Url,
-        TextInputContentType.Password => EditorType.Password,
-        _ => _options.Multiline ? EditorType.Multiline : EditorType.Text
+        _ => IsMultiline ? EditorType.Multiline : EditorType.Text
     };
 
     private EnterKey GetEnterKey() => _options.ReturnKeyType switch
@@ -298,8 +365,18 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         TextInputReturnKeyType.Done => EnterKey.Done,
         TextInputReturnKeyType.Previous => EnterKey.Previous,
         TextInputReturnKeyType.Return => EnterKey.Newline,
-        _ => _options.Multiline ? EnterKey.Newline : EnterKey.Unspecified
+        _ when _options.ContentType == TextInputContentType.Search => EnterKey.Search,
+        _ => IsMultiline ? EnterKey.Newline : EnterKey.Unspecified
     };
+
+    private string? GetPlaceholder(bool sensitive)
+    {
+        if (sensitive || _focusedControl is not TextBox { PlaceholderText: { Length: > 0 } text })
+            return null;
+        if (text.Length <= MaximumPlaceholderLength)
+            return text;
+        return text[..(IsCharacterBoundary(text, MaximumPlaceholderLength) ? MaximumPlaceholderLength : MaximumPlaceholderLength - 1)];
+    }
 
     private static void Check(int status, [CallerArgumentExpression(nameof(status))] string? operation = null)
     {
@@ -455,6 +532,9 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         InputMethodApi.OH_TextConfig_SetInputType(config, state.InputType);
         InputMethodApi.OH_TextConfig_SetEnterKeyType(config, state.EnterKey);
         InputMethodApi.OH_TextConfig_SetSelection(config, state.Start, state.End);
+        var placeholder = state.Placeholder;
+        fixed (char* text = placeholder)
+            InputMethodApi.OH_TextConfig_SetPlaceholder(config, text, placeholder is null ? 0 : (nuint)placeholder.Length + 1);
         var result = InputMethodApi.OH_TextConfig_SetPreviewTextSupport(config, state.SupportsPreview ? (byte)1 : (byte)0);
         if (!state.IsSensitive && session.Input._diagnostics is { TraceImePreview: true } diagnostics)
             diagnostics.Report($"IME preview config: supported={state.SupportsPreview} result={result}");
@@ -506,7 +586,7 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
     private static void SetSelection(nint editor, int start, int end) =>
         Queue(editor, (input, client) =>
         {
-            if (client.SupportsSurroundingText)
+            if (client.SupportsSurroundingText && !input.IsSensitive(client))
             {
                 input.Commit(client);
                 var length = client.SurroundingText.Length;
@@ -540,12 +620,42 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void HandleExtendAction(nint editor, ExtendAction action)
     {
-        if (action == ExtendAction.SelectAll)
-            Queue(editor, static (input, client) =>
-            {
-                input.Commit(client);
-                client.ExecuteContextMenuAction(ContextMenuAction.SelectAll);
-            });
+        var command = action switch
+        {
+            ExtendAction.SelectAll => ContextMenuAction.SelectAll,
+            ExtendAction.Cut => ContextMenuAction.Cut,
+            ExtendAction.Copy => ContextMenuAction.Copy,
+            ExtendAction.Paste => ContextMenuAction.Paste,
+            _ => (ContextMenuAction?)null
+        };
+        if (command is { } value)
+            Queue(editor, (input, client) => input.ExecuteContextMenuAction(client, value));
+    }
+
+    private void ExecuteContextMenuAction(TextInputMethodClient client, ContextMenuAction action)
+    {
+        var sensitive = IsSensitive(client);
+        if (action == ContextMenuAction.SelectAll)
+            Commit(client);
+        else if (_preview is not null || !CanExecuteClipboardAction(action, sensitive))
+            return;
+
+        if (!sensitive)
+            _diagnostics?.Report($"IME editor action: {action}");
+        client.ExecuteContextMenuAction(action);
+    }
+
+    private bool CanExecuteClipboardAction(ContextMenuAction action, bool sensitive)
+    {
+        // TextBox's IME context menu methods do not check the guards used by its normal shortcuts.
+        var textBox = _focusedControl as TextBox;
+        return action switch
+        {
+            ContextMenuAction.Copy => !sensitive && textBox?.CanCopy != false,
+            ContextMenuAction.Cut => !sensitive && textBox?.CanCut != false,
+            ContextMenuAction.Paste => textBox?.CanPaste != false,
+            _ => false
+        };
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -579,6 +689,7 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         *length = (nuint)count;
     }
 
+    // Private commands use an application-specific protocol; Avalonia exposes no corresponding client action.
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int ReceivePrivateCommand(nint editor, nint* commands, nuint size) => UnsupportedEditorOperation;
 
@@ -639,7 +750,7 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
         public nint Options { get; set; }
         public volatile bool Active;
         public volatile SelectionSnapshot Snapshot =
-            new(string.Empty, 0, 0, 0, EditorType.Text, EnterKey.Unspecified, false, true);
+            new(string.Empty, 0, 0, 0, EditorType.Text, EnterKey.Unspecified, null, false, true);
     }
 
     private sealed record PreviewComposition(TextPresenter Presenter, string Body, int Start, int ReplacedEnd, string Text)
@@ -724,5 +835,5 @@ internal sealed unsafe partial class NativeTextInput : ITextInputMethodImpl, IDi
     }
 
     private sealed record SelectionSnapshot(string Text, int Start, int End, int Caret, EditorType InputType, EnterKey EnterKey,
-        bool SupportsPreview, bool IsSensitive);
+        string? Placeholder, bool SupportsPreview, bool IsSensitive);
 }

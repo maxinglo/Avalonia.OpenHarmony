@@ -19,11 +19,11 @@ The first attached icon holds the HAP's single system slot until detached or dis
 Without a custom icon or tooltip it uses the HAP icon and ability label. For a custom icon, the bridge
 decodes the supplied PNG at status bar size and uses that image for both wallpaper variants.
 
-A `NativeMenu` set on the tray icon becomes the system right-click menu. It supports separators as
-groups, one submenu level, and checked items. The system permits up to 20 entries at each level.
+A `NativeMenu` set on the tray icon becomes the system right-click menu. It supports root separators as
+groups, one submenu level, checked items and bitmap icons. The system permits up to 20 entries at each level.
 Only visible, enabled items with a title are exported. HarmonyOS controls menu presentation and
-provides its own app exit action. The export covers menu text and commands. Avalonia item icons,
-keyboard gestures and menu opening events are outside this export. The current API 26 window interface
+provides its own app exit action. The API provides a flat native submenu and has no disabled item,
+keyboard shortcut or menu opening event fields. The current API 26 window interface
 exposes native title buttons without an app-defined system window menu. Apps can present a window menu
 inside the Avalonia view through `NativeMenuBar`. [HarmonyOS Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
 

@@ -27,13 +27,93 @@ internal sealed class OpenHarmonyEgl
 
     public IPlatformGraphics Graphics { get; }
 
+    internal sealed class WindowedGraphics(IPlatformGraphics egl, Action<Exception> fallback) : IPlatformGraphics
+    {
+        private int _disabled;
+        public bool Enabled => Volatile.Read(ref _disabled) == 0;
+        public bool UsesSharedContext => false;
+        public IPlatformGraphicsContext GetSharedContext() => throw new NotSupportedException();
+
+        public IPlatformGraphicsContext CreateContext()
+        {
+            if (Enabled)
+            {
+                try
+                {
+                    return new WindowedContext(this, egl.CreateContext());
+                }
+                catch (Exception error)
+                {
+                    Disable(error);
+                }
+            }
+            return new WindowedContext(this, null);
+        }
+
+        public void Disable(Exception error)
+        {
+            if (Interlocked.Exchange(ref _disabled, 1) == 0)
+                fallback(error);
+        }
+    }
+
+    internal sealed class WindowedContext(WindowedGraphics graphics, IPlatformGraphicsContext? egl)
+        : IPlatformGraphicsContext
+    {
+        public bool IsLost
+        {
+            get
+            {
+                if (egl is null)
+                    return false;
+                if (!graphics.Enabled && egl is EglContext { IsLost: false } native)
+                    native.NotifyContextLost();
+                return !graphics.Enabled || egl.IsLost;
+            }
+        }
+        public object? TryGetFeature(Type featureType) => egl?.TryGetFeature(featureType);
+
+        public IDisposable EnsureCurrent()
+        {
+            if (egl is null)
+                return this;
+            try
+            {
+                return egl.EnsureCurrent();
+            }
+            catch (Exception error) when (error is not PlatformGraphicsContextLostException)
+            {
+                graphics.Disable(error);
+                throw;
+            }
+        }
+
+        internal IPlatformRenderInterfaceContext CreateBackend(IPlatformRenderInterface skia)
+        {
+            var software = skia.CreateBackendContext(null);
+            if (egl is null)
+                return software;
+            try
+            {
+                return new OpenHarmonyWindowedSkia.Backend(skia.CreateBackendContext(egl), software);
+            }
+            catch (Exception error)
+            {
+                graphics.Disable(error);
+                return software;
+            }
+        }
+
+        public void Dispose() => egl?.Dispose();
+    }
+
     public Window AcquireWindow(long token, PixelSize size, double scaling, Action<Exception> fallback)
     {
         var handle = AcquireNativeWindow(token);
         if (handle == 0)
             throw new InvalidOperationException("The XComponent NativeWindow is unavailable for EGL.");
 
-        var window = new Window(new NativeWindowReference(handle), size, scaling, fallback);
+        var window = new Window(new NativeWindowReference(handle), token, size, scaling, fallback);
         try
         {
             ValidateWindow(window);
@@ -99,13 +179,16 @@ internal sealed class OpenHarmonyEgl
         }
     }
 
-    internal sealed class Window(NativeWindowReference window, PixelSize size, double scaling, Action<Exception> fallback) :
+    internal sealed class Window(NativeWindowReference window, long token, PixelSize size, double scaling,
+        Action<Exception> fallback) :
         IGlPlatformSurface, EglGlPlatformSurface.IEglWindowGlPlatformSurfaceInfoWithWaitPolicy, IDisposable
     {
+        private bool _disposed;
         private bool _logFirstFrame;
+        internal Func<bool>? CanRender { get; set; }
         public PixelSize Size { get; private set; } = size;
         public double Scaling { get; private set; } = scaling;
-        public bool IsReady => !window.IsClosed;
+        public bool IsReady => !_disposed && (CanRender?.Invoke() ?? true);
         public bool SkipWaits => true;
         public nint Handle => window.DangerousGetHandle();
 
@@ -116,7 +199,7 @@ internal sealed class OpenHarmonyEgl
             if (!_logFirstFrame)
                 return;
             _logFirstFrame = false;
-            Report($"Presented Avalonia EGL frame {frameSize.Width}x{frameSize.Height}");
+            Report($"Presented Avalonia EGL frame {frameSize.Width}x{frameSize.Height} (surface {token})");
         }
 
         public void Resize(PixelSize newSize, double newScaling)
@@ -133,35 +216,48 @@ internal sealed class OpenHarmonyEgl
                 window.DangerousAddRef(ref retained);
                 var egl = ((EglContext)context).Display.EglInterface;
                 var target = new EglGlPlatformSurface(this).CreateGlRenderTarget(context);
-                return new RenderTarget(window, target, egl, FramePresented, fallback);
+                return new RenderTarget(this, target, egl);
             }
             catch (Exception error)
             {
                 if (retained)
                     window.DangerousRelease();
-                fallback(error);
+                ReportFailure(error);
                 throw;
             }
         }
 
-        public void Dispose() => window.Dispose();
+        public void Dispose()
+        {
+            _disposed = true;
+            window.Dispose();
+        }
 
-        private sealed class RenderTarget(NativeWindowReference window, IGlPlatformSurfaceRenderTarget target,
-            EglInterface egl, Action<PixelSize> presented, Action<Exception> fallback) : IGlPlatformSurfaceRenderTarget
+        private void ReleaseRenderTarget() => window.DangerousRelease();
+
+        private void ReportFailure(Exception error)
+        {
+            if (!_disposed)
+                fallback(error);
+        }
+
+        private sealed class RenderTarget(Window owner, IGlPlatformSurfaceRenderTarget target,
+            EglInterface egl) : IGlPlatformSurfaceRenderTarget
         {
             private bool _disposed;
-            public PlatformRenderTargetState State => target.State;
+            public PlatformRenderTargetState State => owner._disposed
+                ? PlatformRenderTargetState.Corrupted
+                : owner.IsReady ? target.State : PlatformRenderTargetState.NotReadyWillWakeupRenderLoop;
 
             public IGlPlatformSurfaceRenderingSession BeginDraw(IRenderTarget.RenderTargetSceneInfo sceneInfo)
             {
                 try
                 {
-                    return new RenderingSession(target.BeginDraw(sceneInfo), egl, presented, fallback);
+                    return new RenderingSession(target.BeginDraw(sceneInfo), egl, owner.FramePresented, owner.ReportFailure);
                 }
                 catch (Exception error)
                 {
-                    if (!window.IsClosed)
-                        fallback(error);
+                    owner.ReportFailure(error);
                     throw;
                 }
             }
@@ -177,7 +273,7 @@ internal sealed class OpenHarmonyEgl
                 }
                 finally
                 {
-                    window.DangerousRelease();
+                    owner.ReleaseRenderTarget();
                 }
             }
         }

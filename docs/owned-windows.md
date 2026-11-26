@@ -4,7 +4,11 @@ An application can opt into a managed Avalonia `Window` for its main `WindowStag
 `AppBuilder.With(new OpenHarmonyWindowOptions())`. Its existing
 `ISingleViewApplicationLifetime.MainView` becomes the content of the stage window.
 Call `TopLevel.GetTopLevel(control)` on an attached control to get that owner. A standard
-Avalonia `Window` can call `Show(owner)` or `ShowDialog<TResult>(owner)`.
+Avalonia `Window` can call `Show(owner)` or `ShowDialog<TResult>(owner)`. API 26 can nest
+a native child below an owned window. In freeform mode, `Window.Show()` without an owner
+creates an independent auxiliary window within the same stage. The system closes it with
+the stage and groups it into the same Dock task.
+[HarmonyOS window types](https://developer.huawei.com/consumer/en/doc/HarmonyOS-Guides/window-type-overview/)
 
 The stage and its child windows have separate XComponent framebuffers, input routes, and
 HarmonyOS window IDs for the system keyboard. A child surface can detach and attach again
@@ -25,17 +29,18 @@ disables its owner's input while the dialog is open.
   `avaoh_report_child_event`, and `avaoh_request_child_close` from the NativeAOT application.
   Key `0` carries stage notifications and geometry, including events before the first
   XComponent surface is created. Counter implements these callbacks in `samples/Counter/Program.Windows.cs`.
+- For extended stage title bars, also export `avaoh_report_title_bar` and `avaoh_title_bar_press`
+  as in the same Counter file. These two exports are optional for existing hosts.
 - To provide child safe area and fixed-keyboard occlusion, export `avaoh_set_child_avoid_area`
   as in `samples/Counter/Program.Insets.cs`.
 - Run the Counter build with `-Windowed`. The HAP is placed in the `windowed` subdirectory
   for its ABI and build mode. Use the counter and move/resize commands in the modal dialog,
   then select **Return dialog result** and check the main counter remains interactive.
 
-The windowed host uses software framebuffers and supports child windows directly owned
-by the stage. Window decorations and availability depend on the device's window mode.
-A device that rejects a frame at creation can create a child with platform-default geometry.
-Standalone top levels, owners other than the stage, and custom move and resize drags
-need separate support.
+The windowed host uses software framebuffers by default and can opt into EGL per XComponent.
+Window decorations and availability depend on the device's window mode. A device that
+rejects a frame at creation can create a child with platform-default geometry.
+[EGL options](integration.md#skia-egl-rendering)
 
 ## Desktop stage window state
 
@@ -55,11 +60,63 @@ managed content remain attached across a minimize or a new XComponent surface. T
 caption controls apply to the main stage in freeform window mode. Child windows continue to follow
 the dedicated child-window visibility, geometry and close APIs.
 
+The freeform stage supports programmatic position, title, decoration and size limit changes.
+`Topmost` forwards to the native setting on devices and hosts with
+`ohos.permission.WINDOW_TOPMOST`. `BeginResizeDrag` drives floating window geometry from
+an Avalonia grip using the SDK resize and move calls. System edge dragging uses its native path.
+The public window API provides no per-window Dock visibility or dynamic bitmap icon setter.
+[Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
+· [Topmost permission](https://developer.huawei.com/consumer/en/doc/HarmonyOS-Guides/permissions-for-all/#ohospermissionwindow_topmost)
+
 In the windowed Counter, the **Stage minimize**, **Stage maximize**, **Stage normal**,
 **Stage fullscreen**, **Stage resize**, and **Stage caption policy** controls issue those requests.
 Counter logs observed state, position, client and frame sizes, and both the managed and native
 window identities. `tests/LifecycleProbe` covers managed notification and surface replacement;
 the ArkTS `WindowCloseProbe` also checks desktop request routing with injected native behavior.
+
+## Popup and transparency
+
+Avalonia ComboBox and similar popups use the owner surface's overlay. The native ArkUI
+popup API takes an ArkUI builder and provides its own focus, dismissal and window scope.
+The owner overlay keeps Avalonia hit testing and focus in the same window.
+[ArkUI popup API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/ts-universal-attributes-popup/)
+
+XComponent composition reports opaque. Window background color affects the content area.
+On PC, `setWindowContainerColor` targets the main window container and fixes inactive
+opacity. API 26 `setWindowContainerModalColor` requires the restricted
+`ohos.permission.SET_WINDOW_ALPHA` permission. Subwindow shape masks use fixed window
+dimensions. These APIs cannot provide a consistent live alpha channel across the hosted
+window and its system container.
+[Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
+· [Restricted permissions](https://developer.huawei.com/consumer/en/doc/doccenter-capabilities/restricted-permissions/)
+
+## Extended stage title bar
+
+In freeform window mode, set `Window.ExtendClientAreaToDecorationsHint = true` on the
+stage's Avalonia window to draw into the title area. HarmonyOS keeps the native minimize,
+maximize, restore, and close controls over the Avalonia surface. The native caption
+controls follow the window's existing policy.
+[HarmonyOS freeform window guide](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/application-adaptation-freeform-window/)
+
+Use `IsExtendedIntoWindowDecorations` to detect whether extension took effect. In the
+custom title area, `WindowDecorationMargin.Top` gives the title height and
+`WindowDecorationMargin.Right` gives the width to reserve for the native controls,
+both in DIP. Set `ExtendClientAreaTitleBarHeightHint` to request a custom title height.
+The backend keeps enough height for the system button rectangle. The default height
+uses the native title row. Observe margin changes to keep the layout aligned with the
+system controls.
+
+The caption buttons follow the stage's actual Avalonia theme while the title bar is
+extended. Turning the extension off restores the native button color mode.
+[HarmonyOS caption button style](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/arkts-apis-window-i/)
+
+Call `Window.BeginMoveDrag(args)` from the primary `PointerPressed` handler of a drag
+region inside the extended title area of a floating stage. Keep interactive controls
+outside that region. HarmonyOS takes over the window move. In Counter, **Toggle title
+bar extension** enables the custom title and **Title action** demonstrates an interactive
+Avalonia control beside the drag region. Toggling the hint off restores the ordinary
+system title bar.
+[HarmonyOS window layout guide](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/window-layout/)
 
 ## Child window policies and interop
 
