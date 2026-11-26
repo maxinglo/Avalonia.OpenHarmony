@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -80,14 +81,16 @@ public sealed partial class OpenHarmonyHost
     }
 
     /// <summary>Updates the hosted window's position in pixels relative to its display.</summary>
-    public void SetWindowPosition(long displayId, PixelPoint position) => Post(() =>
+    public void SetWindowPosition(long displayId, PixelPoint position) => Post(() => SetWindowPositionCore(displayId, position));
+
+    private void SetWindowPositionCore(long displayId, PixelPoint position)
     {
         _windowPosition = position;
         var changed = _screens.SetHostDisplay(displayId);
         UpdateSurfaceOrigin();
         if (changed)
             _screens.NotifyChanged();
-    });
+    }
 
     /// <summary>Updates the XComponent origin in pixels relative to the hosted window.</summary>
     public void SetSurfaceOffset(long surface, PixelPoint offset) => Post(() =>
@@ -176,7 +179,7 @@ public sealed partial class OpenHarmonyHost
         var render = _applicationForeground && _windowVisible;
         if (_stageRoute is { } stage)
         {
-            _rendering = render && stage.Token != 0;
+            _rendering = render && stage.Token != 0 && stage.Window.WindowState != WindowState.Minimized;
             stage.Window.Surface.SetInputMethodActive(_rendering && _windowFocused);
             stage.Window.ReportVisible(_rendering);
             return;
@@ -202,7 +205,7 @@ public sealed partial class OpenHarmonyHost
         if (_topLevel is { } topLevel)
         {
             topLevel.ScreenOrigin = _screens.HostOrigin + _windowPosition + _surfaceOffset;
-            _stageRoute?.Window.ReportFrame(new PixelRect(_screens.HostOrigin + _windowPosition, topLevel.PixelSize));
+            _stageRoute?.Window.ReportFrame(new PixelRect(_screens.HostOrigin + _windowPosition, _stageFrameSize ?? topLevel.PixelSize));
         }
     }
 

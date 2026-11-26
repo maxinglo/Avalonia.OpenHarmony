@@ -4,6 +4,7 @@ export const registerSystemRequests: (handler: (id: bigint, operation: string, a
                                       canPickFolders: boolean) => void;
 export const unregisterSystemRequests: () => void;
 export const completeSystemRequest: (id: bigint, value: string | null, fd?: number) => void;
+export const reportTrayEvent: (id: bigint, menuCode: string) => void;
 export const requestPaste: () => void;
 export const setLifecycle: (transition: number) => void;
 export const setTheme: (dark: boolean) => void;
@@ -22,7 +23,7 @@ export const reportChildEvent: (key: number, event: number) => void;
 export const requestChildClose: (key: number) => Promise<boolean>;
 export const requestBack: () => boolean;
 export const updateSurface: (surfaceId: string, width: number, height: number, scaling: number,
-                             childWindowKey?: number) => void;
+                             childWindowKey?: number, nativeControls?: NodeContent) => void;
 export const closeSurface: (surfaceId: string) => void;
 /** Legacy screen coordinates are accepted for compatibility. */
 export const configureAccessibility: (surfaceId: string, enabled: boolean, content: NodeContent | null,

@@ -33,12 +33,16 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     private PixelSize _pixelSize;
     private IntPtr _pixels;
     private bool _disposed;
+    private OpenHarmonyNativeControlHost? _nativeControlHost;
+    private long _nativeControlSurface;
+    private bool _nativeControlInputEnabled = true;
 
     public SurfaceTopLevel(long surface, Compositor compositor, OpenHarmonyHost.PresentFrame present,
         Func<int>? getInputWindowId, Action<string> reportError, OpenHarmonyScreens screens,
         ILauncher? launcher, IStorageProvider? storageProvider, OpenHarmonyEgl.Window? eglWindow)
     {
         Surface = surface;
+        _nativeControlSurface = surface;
         Compositor = compositor;
         _present = present;
         _reportError = reportError;
@@ -101,6 +105,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
             ScalingChanged?.Invoke(RenderScaling);
         }
         Resized?.Invoke(ClientSize, WindowResizeReason.Unspecified);
+        _nativeControlHost?.RefreshAttachments();
         Paint?.Invoke(new Rect(ClientSize));
         _cursorController?.Invalidate();
     }
@@ -163,6 +168,16 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant) { }
     public object? TryGetFeature(Type featureType)
     {
+        if (featureType == typeof(INativeControlHostImpl))
+        {
+            if (!_disposed && _nativeControlHost == null && NativeControlApi.Supports(_nativeControlSurface))
+            {
+                _nativeControlHost = new(this, _reportError);
+                _nativeControlHost.SetSurface(_nativeControlSurface);
+                _nativeControlHost.SetInputEnabled(_nativeControlInputEnabled);
+            }
+            return _disposed ? null : _nativeControlHost;
+        }
         if (featureType == typeof(IClipboard))
             return OpenHarmonyClipboard.Instance;
         if (featureType == typeof(ITextInputMethodImpl))
@@ -182,9 +197,22 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         return null;
     }
 
+    internal void SetNativeControlSurface(long token)
+    {
+        _nativeControlSurface = token;
+        _nativeControlHost?.SetSurface(token);
+    }
+
+    internal void SetNativeControlInputEnabled(bool enabled)
+    {
+        _nativeControlInputEnabled = enabled;
+        _nativeControlHost?.SetInputEnabled(enabled);
+    }
+
     public void Dispose()
     {
         _disposed = true;
+        _nativeControlHost?.Dispose();
         CancelInboundDrag();
         Insets.Dispose();
         _textInput?.Dispose();

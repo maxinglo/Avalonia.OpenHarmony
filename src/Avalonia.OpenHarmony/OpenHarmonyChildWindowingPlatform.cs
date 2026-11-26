@@ -4,7 +4,8 @@ namespace Avalonia.OpenHarmony;
 
 internal sealed class OpenHarmonyChildWindowingPlatform(
     Func<OpenHarmonyChildWindow> createWindow,
-    Func<ITopLevelImpl> getEmbeddableTopLevel) : IWindowingPlatform
+    Func<ITopLevelImpl> getEmbeddableTopLevel,
+    Func<ITrayIconImpl?> createTrayIcon) : IWindowingPlatform
 {
     public IWindowImpl CreateWindow() => createWindow();
 
@@ -12,7 +13,7 @@ internal sealed class OpenHarmonyChildWindowingPlatform(
         throw new PlatformNotSupportedException("HarmonyOS cannot embed an independent Window.");
 
     public ITopLevelImpl CreateEmbeddableTopLevel() => getEmbeddableTopLevel();
-    public ITrayIconImpl? CreateTrayIcon() => null;
+    public ITrayIconImpl? CreateTrayIcon() => createTrayIcon();
 
     public void GetWindowsZOrder(ReadOnlySpan<IWindowImpl> windows, Span<long> zOrder)
     {

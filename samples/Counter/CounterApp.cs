@@ -130,6 +130,7 @@ public sealed partial class CounterApp : Application
 #if OHOS
             var dragSource = CreateTextDragSource(ReportStatus);
             var (bitmapCursor, hiddenCursor) = CreateCursorTargets();
+            var (trayPanel, trayTargets) = CreateTrayControls();
 #endif
             var content = new StackPanel
             {
@@ -156,6 +157,13 @@ public sealed partial class CounterApp : Application
             var (windowButtons, windowTargets) = ChildWindowButtons();
             content.Children.Add(windowButtons);
 #endif
+#if OHOS
+            var (nativeControls, nativeControlTargets) = CreateNativeControlSample();
+            content.Children.Add(nativeControls);
+#endif
+#if OHOS
+            content.Children.Add(trayPanel);
+#endif
             var border = new Border
             {
                 Child = new ScrollViewer { Content = content },
@@ -169,6 +177,8 @@ public sealed partial class CounterApp : Application
                 ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link),
 #if OHOS
                 ("Drag source", dragSource), ("Bitmap cursor", bitmapCursor), ("Hidden cursor", hiddenCursor),
+                .. nativeControlTargets,
+                .. trayTargets,
 #endif
                 ("Immersive", immersive),
 #if OHOS_COUNTER_WINDOWS

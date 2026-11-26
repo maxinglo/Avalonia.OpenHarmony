@@ -8,12 +8,17 @@ const source = fs.readFileSync(path.resolve(__dirname, '../../src/Avalonia.OpenH
 const native = new Map();
 const calls = [];
 const events = [];
+let rejectStageEvent;
 const focusTransfers = [];
 const nativeTypes = { WINDOW_SHOWN: 1, WINDOW_HIDDEN: 4, WINDOW_DESTROYED: 5 };
+const statuses = { FULL_SCREEN: 1, MAXIMIZE: 2, MINIMIZE: 3, FLOATING: 4 };
+const presentations = { EXIT_IMMERSIVE: 1, ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER: 3 };
 const missing = Object.assign(new Error('no window'), { code: 1300002 });
 const window = {
   ModalityType: { WINDOW_MODALITY: 0 },
   WindowEventType: nativeTypes,
+  WindowStatusType: statuses,
+  MaximizePresentation: presentations,
   findWindow(name) {
     if (!native.has(name)) throw missing;
     return native.get(name);
@@ -24,7 +29,13 @@ const window = {
   }
 };
 const bridge = {
-  reportChildEvent: (key, type) => events.push([key, type]),
+  reportChildEvent(key, type) {
+    if (key === 0 && type === rejectStageEvent) {
+      rejectStageEvent = undefined;
+      throw new Error('stage notification rejected');
+    }
+    events.push([key, type]);
+  },
   reportChildFrame: () => {},
   requestChildClose: async () => false
 };
@@ -116,7 +127,28 @@ const stage = {
 const main = {
   visible: true,
   focused: true,
-  getWindowProperties: () => ({ id: 70, windowRect: rect }),
+  desktop: false,
+  status: statuses.FLOATING,
+  listeners: new Map(),
+  getWindowProperties: () => ({ id: 70, windowRect: rect, drawableRect: { ...rect, width: 790, height: 560 } }),
+  on(type, callback) { this.listeners.set(type, callback); },
+  off(type, callback) { assert.equal(this.listeners.get(type), callback); this.listeners.delete(type); },
+  isInFreeWindowMode() { return this.desktop; },
+  getWindowStatus() { return this.status; },
+  reportStatus(status) {
+    this.status = status;
+    this.listeners.get('windowStatusDidChange')?.(status);
+  },
+  async resizeAsync(width, height) { this.resize = [width, height]; },
+  async setResizeByDragEnabled(enabled) { this.dragResize = enabled; },
+  setWindowTitleButtonVisible(canMaximize, canMinimize) { this.captionButtons = [canMaximize, canMinimize]; },
+  async maximize(presentation) {
+    this.presentation = presentation;
+    this.reportStatus(presentation === presentations.EXIT_IMMERSIVE ? statuses.MAXIMIZE : statuses.FULL_SCREEN);
+  },
+  async recover() { this.reportStatus(statuses.FLOATING); },
+  async minimize() { this.reportStatus(statuses.MINIMIZE); },
+  async restore() { if (this.canRestore) this.reportStatus(statuses.FLOATING); },
   isFocused() { return this.focused; },
   isWindowShowing() { return this.visible; }
 };
@@ -127,6 +159,51 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
 
 (async () => {
   assert.ok(has(0, 5));
+  const setStageState = state => send(0, 'setState', false, { state });
+  assert.equal(await setStageState('maximized'), null);
+  assert.ok(!has(0, 7));
+  main.desktop = true;
+  rejectStageEvent = 7;
+  main.listeners.get('freeWindowModeChange')(main.desktop);
+  assert.ok(!has(0, 7));
+  main.listeners.get('windowEvent')(nativeTypes.WINDOW_SHOWN);
+  assert.ok(has(0, 7));
+  assert.ok(has(0, 9));
+  assert.equal(await setStageState('maximized'), '');
+  assert.equal(main.presentation, presentations.EXIT_IMMERSIVE);
+  assert.deepEqual(events.at(-1), [0, 11]);
+  assert.equal(events.filter(([key, event]) => key === 0 && event === 11).length, 1);
+  assert.equal(await send(0, 'resize', false, { width: 700, height: 350 }), null);
+  assert.equal(await setStageState('fullscreen'), '');
+  assert.equal(main.presentation, presentations.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER);
+  assert.deepEqual(events.at(-1), [0, 12]);
+  assert.equal(await setStageState('normal'), '');
+  assert.equal(await send(0, 'resize', false, { width: 710, height: 390 }), '');
+  assert.deepEqual(main.resize, [710, 390]);
+  assert.equal(await send(0, 'setResizable', false, { resizable: false }), '');
+  assert.equal(main.dragResize, false);
+  assert.equal(await send(0, 'setCaptionButtons', false, { canMaximize: false, canMinimize: true }), '');
+  assert.deepEqual(main.captionButtons, [false, true]);
+  assert.equal(await setStageState('minimized'), '');
+  assert.deepEqual(events.at(-1), [0, 10]);
+  assert.equal(await setStageState('normal'), null);
+  assert.deepEqual(events.at(-1), [0, 10]);
+  main.canRestore = true;
+  assert.equal(await setStageState('normal'), '');
+  assert.deepEqual(events.at(-1), [0, 9]);
+  rejectStageEvent = 11;
+  main.reportStatus(statuses.MAXIMIZE);
+  assert.deepEqual(events.at(-1), [0, 9]);
+  main.reportStatus(statuses.MAXIMIZE);
+  assert.deepEqual(events.at(-1), [0, 11]);
+  main.reportStatus(statuses.FLOATING);
+  assert.deepEqual(events.at(-1), [0, 9]);
+  main.desktop = false;
+  main.listeners.get('freeWindowModeChange')(main.desktop);
+  assert.deepEqual(events.at(-1), [0, 8]);
+  assert.equal(await setStageState('maximized'), null);
+  calls.push('Stage routes native desktop states, floating frame resize and caption policy, and retries rejected notifications');
+
   next = { destroyFails: 2 };
   assert.equal(await send(1, 'show', true), '');
   const first = native.get('AvaloniaChild1');
@@ -231,6 +308,7 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   suspendCreate = new Promise(resolve => { finish = resolve; });
   const showing = send(6, 'show');
   windows.stop();
+  assert.equal(main.listeners.size, 0);
   finish();
   assert.equal(await showing, null);
   assert.equal(native.has('AvaloniaChild6'), false);

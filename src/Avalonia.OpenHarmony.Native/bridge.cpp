@@ -22,6 +22,7 @@
 #include "platform_displays.h"
 
 #include "accessibility.h"
+#include "native_control_host.h"
 
 namespace {
 constexpr char Tag[] = "AvaloniaOHOS";
@@ -41,6 +42,7 @@ struct AppLibrary {
         closeChildSurface = reinterpret_cast<decltype(closeChildSurface)>(dlsym(handle, "avaoh_close_child_surface"));
         reportChildFrame = reinterpret_cast<decltype(reportChildFrame)>(dlsym(handle, "avaoh_report_child_frame"));
         reportChildEvent = reinterpret_cast<decltype(reportChildEvent)>(dlsym(handle, "avaoh_report_child_event"));
+        reportTrayEvent = reinterpret_cast<decltype(reportTrayEvent)>(dlsym(handle, "avaoh_report_tray_event"));
         requestChildClose = reinterpret_cast<decltype(requestChildClose)>(dlsym(handle, "avaoh_request_child_close"));
         touch = reinterpret_cast<decltype(touch)>(dlsym(handle, "avaoh_touch"));
         pointer = reinterpret_cast<decltype(pointer)>(dlsym(handle, "avaoh_pointer"));
@@ -72,6 +74,7 @@ struct AppLibrary {
     void (*closeChildSurface)(int32_t, int64_t) = nullptr;
     void (*reportChildFrame)(int32_t, int32_t, int64_t, int32_t, int32_t, int32_t, int32_t) = nullptr;
     void (*reportChildEvent)(int32_t, int32_t) = nullptr;
+    void (*reportTrayEvent)(int64_t, const char*, int32_t) = nullptr;
     int32_t (*requestChildClose)(int32_t) = nullptr;
     void (*touch)(int64_t, int64_t, int32_t, double, double) = nullptr;
     void (*pointer)(int64_t, int32_t, int32_t, double, double, double, double, int32_t) = nullptr;
@@ -116,6 +119,28 @@ struct Surface {
 
 std::mutex surfaceMutex;
 constexpr int32_t MainWindow = 0;
+
+// Matches the event IDs in ChildWindows.ets and OpenHarmonyChildWindowEvent.
+enum class WindowReportEvent : int32_t {
+    Shown = 0,
+    Destroyed = 4,
+    StageCreated = 5,
+    ModalityReleased = 6,
+    StageDesktopAvailable = 7,
+    StageFullScreen = 12,
+};
+
+constexpr bool IsWindowReportEvent(int32_t windowKey, int32_t eventId)
+{
+    if (windowKey < MainWindow)
+        return false;
+    const auto event = static_cast<WindowReportEvent>(eventId);
+    if (windowKey == MainWindow)
+        return event == WindowReportEvent::Destroyed || event == WindowReportEvent::StageCreated ||
+            (event >= WindowReportEvent::StageDesktopAvailable && event <= WindowReportEvent::StageFullScreen);
+    return event >= WindowReportEvent::Shown && event <= WindowReportEvent::ModalityReleased &&
+        event != WindowReportEvent::StageCreated;
+}
 std::unordered_map<int32_t, Surface> surfaces;
 int64_t nextToken = 0;
 std::atomic<int32_t> inputWindowId{0};
@@ -137,6 +162,7 @@ void RemoveSurface(decltype(surfaces)::iterator entry)
 
 void ReportClosedSurface(int32_t windowKey, int64_t token)
 {
+    native_controls::Unbind(token);
     accessibility::Detach(token);
     if (windowKey == MainWindow)
         App().destroy(token);
@@ -393,14 +419,14 @@ napi_value ReportChildFrame(napi_env env, napi_callback_info info)
     int32_t windowKey, windowId, x, y, width, height;
     int64_t displayId;
     if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 7 ||
-        napi_get_value_int32(env, args[0], &windowKey) != napi_ok || windowKey <= MainWindow ||
+        napi_get_value_int32(env, args[0], &windowKey) != napi_ok || windowKey < MainWindow ||
         napi_get_value_int32(env, args[1], &windowId) != napi_ok || windowId <= 0 ||
         napi_get_value_int64(env, args[2], &displayId) != napi_ok || displayId < 0 ||
         napi_get_value_int32(env, args[3], &x) != napi_ok ||
         napi_get_value_int32(env, args[4], &y) != napi_ok ||
         napi_get_value_int32(env, args[5], &width) != napi_ok || width <= 0 ||
         napi_get_value_int32(env, args[6], &height) != napi_ok || height <= 0)
-        return Error(env, "Expected a child window key, HarmonyOS window and display IDs, and a physical frame.");
+        return Error(env, "Expected a window key, HarmonyOS window and display IDs, and a physical frame.");
     if (auto callback = App().reportChildFrame)
         callback(windowKey, windowId, displayId, x, y, width, height);
     return nullptr;
@@ -412,14 +438,31 @@ napi_value ReportChildEvent(napi_env env, napi_callback_info info)
     napi_value args[2];
     int32_t windowKey, event;
     if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 2 ||
-        napi_get_value_int32(env, args[0], &windowKey) != napi_ok || windowKey < MainWindow ||
-        napi_get_value_int32(env, args[1], &event) != napi_ok || event < 0 || event > 6 ||
-        (windowKey == MainWindow ? (event != 4 && event != 5) : event == 5))
-        return Error(env, "Expected a child window key and a lifecycle event.");
-    if (event == 4)
+        napi_get_value_int32(env, args[0], &windowKey) != napi_ok ||
+        napi_get_value_int32(env, args[1], &event) != napi_ok || !IsWindowReportEvent(windowKey, event))
+        return Error(env, "Expected a stage or child window event with its matching window key.");
+    if (event == static_cast<int32_t>(WindowReportEvent::Destroyed))
         RetireWindowSurfaces(windowKey);
     if (auto callback = App().reportChildEvent)
         callback(windowKey, event);
+    return nullptr;
+}
+
+napi_value ReportTrayEvent(napi_env env, napi_callback_info info)
+{
+    size_t count = 2;
+    napi_value args[2];
+    int64_t id;
+    bool lossless;
+    size_t length;
+    char menuCode[257];
+    if (napi_get_cb_info(env, info, &count, args, nullptr, nullptr) != napi_ok || count != 2 ||
+        napi_get_value_bigint_int64(env, args[0], &id, &lossless) != napi_ok || !lossless || id < 0 ||
+        napi_get_value_string_utf8(env, args[1], nullptr, 0, &length) != napi_ok || length >= sizeof(menuCode) ||
+        napi_get_value_string_utf8(env, args[1], menuCode, sizeof(menuCode), &length) != napi_ok)
+        return Error(env, "Expected a status bar item ID and a menu code.");
+    if (auto callback = App().reportTrayEvent)
+        callback(id, menuCode, static_cast<int32_t>(length));
     return nullptr;
 }
 
@@ -482,8 +525,8 @@ napi_value RequestChildClose(napi_env env, napi_callback_info info)
 
 napi_value UpdateSurface(napi_env env, napi_callback_info info)
 {
-    size_t count = 5;
-    napi_value args[5];
+    size_t count = 6;
+    napi_value args[6];
     uint64_t surfaceId;
     int32_t width, height;
     int32_t windowKey = MainWindow;
@@ -493,7 +536,7 @@ napi_value UpdateSurface(napi_env env, napi_callback_info info)
         napi_get_value_int32(env, args[1], &width) != napi_ok ||
         napi_get_value_int32(env, args[2], &height) != napi_ok ||
         napi_get_value_double(env, args[3], &scaling) != napi_ok ||
-        (count == 5 && (napi_get_value_int32(env, args[4], &windowKey) != napi_ok || windowKey <= MainWindow)) ||
+        (count >= 5 && (napi_get_value_int32(env, args[4], &windowKey) != napi_ok || windowKey < MainWindow)) ||
         width <= 0 || height <= 0 || static_cast<int64_t>(width) * height > 16'777'216 ||
         !std::isfinite(scaling) || scaling <= 0)
         return Error(env, "Invalid XComponent surface.");
@@ -554,6 +597,8 @@ napi_value UpdateSurface(napi_env env, napi_callback_info info)
         OH_LOG_Print(LOG_APP, LOG_ERROR, LogDomain, Tag, "NativeWindow setup failed: %{public}d", status);
         return Error(env, "Could not configure the XComponent native window.");
     }
+    if (count == 6 && !native_controls::Bind(env, args[5], token))
+        OH_LOG_Print(LOG_APP, LOG_WARN, LogDomain, Tag, "Could not bind the ArkUI native control slot.");
     if (windowKey == MainWindow)
         app.resize(token, width, height, scaling);
     else
@@ -795,6 +840,7 @@ napi_value Init(napi_env env, napi_value exports)
         {"clearWindowInsets", nullptr, ClearWindowInsets, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportChildFrame", nullptr, ReportChildFrame, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reportChildEvent", nullptr, ReportChildEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"reportTrayEvent", nullptr, ReportTrayEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestChildClose", nullptr, RequestChildClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestBack", nullptr, RequestBack, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"requestPaste", nullptr, RequestPaste, nullptr, nullptr, nullptr, napi_default, nullptr},

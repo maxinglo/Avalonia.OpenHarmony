@@ -284,6 +284,7 @@ public sealed partial class OpenHarmonyHost
         }
         finally
         {
+            _trayIcon?.Dispose();
             _renderTimer?.Dispose();
         }
     }
@@ -302,7 +303,8 @@ public sealed partial class OpenHarmonyHost
         _renderTimer = new OpenHarmonyRenderTimer(Dispatcher.UIThread, _reportError);
         locator.Bind<IRenderLoop>().ToConstant(RenderLoop.FromTimer(_renderTimer));
         locator.Bind<IWindowingPlatform>().ToConstant(new OpenHarmonyChildWindowingPlatform(CreateOwnedWindow,
-            () => _topLevel ?? throw new InvalidOperationException("The XComponent surface is not available.")));
+            () => _topLevel ?? throw new InvalidOperationException("The XComponent surface is not available."),
+            CreateTrayIcon));
         locator.Bind<IPlatformGraphics?>().ToFunc(() => _topLevel is { UsesEgl: true } ? _egl?.Graphics : null);
         locator.Bind<Compositor>().ToConstant(new Compositor(null));
     }

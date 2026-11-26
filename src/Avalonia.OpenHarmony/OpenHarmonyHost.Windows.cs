@@ -24,7 +24,13 @@ public enum OpenHarmonyChildWindowEvent
     Unfocused,
     Destroyed,
     StageCreated,
-    ModalityReleased
+    ModalityReleased,
+    StageDesktopAvailable,
+    StageDesktopUnavailable,
+    StageNormal,
+    StageMinimized,
+    StageMaximized,
+    StageFullScreen
 }
 
 public sealed partial class OpenHarmonyHost
@@ -35,6 +41,9 @@ public sealed partial class OpenHarmonyHost
     private WindowRoute? _stageRoute;
     private Window? _stageRoot;
     private bool _stageCanOpen = true;
+    private bool _stageDesktop;
+    private WindowState _stageWindowState;
+    private PixelSize? _stageFrameSize;
     private long _closedStageToken;
 
     private WindowRoute CreateWindowRoute(int id, bool isStage, OpenHarmonyWindowOptions options)
@@ -48,6 +57,7 @@ public sealed partial class OpenHarmonyHost
                     _present(token, pixels, width, height, rowBytes);
             }, isStage ? _getInputWindowId : () => route.PlatformId, _reportError,
             _screens, _launcher, _storageProvider, null);
+        surface.SetNativeControlSurface(0);
         surface.SetInputMethodActive(isStage && IsInputMethodWindowActive);
         route.Window = new OpenHarmonyChildWindow(id, isStage, surface,
             request => SendWindowRequest(options, request), OnManagedWindowClosed, _reportError);
@@ -78,6 +88,8 @@ public sealed partial class OpenHarmonyHost
                 return;
             var route = CreateWindowRoute(0, true, options);
             _stageRoute = route;
+            route.Window.ReportStageDesktop(_stageDesktop);
+            route.Window.ReportWindowState(_stageWindowState);
             _topLevel = route.Window.Surface;
             if (_requestInsetsCommand is { } command)
                 _topLevel.Insets.SetRequestHandler(command, _reportError);
@@ -109,6 +121,7 @@ public sealed partial class OpenHarmonyHost
         if (token != route.Token)
             CancelInboundDrag(route.Token);
         Volatile.Write(ref route.Token, token);
+        route.Window.Surface.SetNativeControlSurface(token);
         route.LatestToken = token;
         route.Window.ApplySurfaceGeometry(width, height, scaling);
         return true;
@@ -123,6 +136,7 @@ public sealed partial class OpenHarmonyHost
             CancelInboundDrag(token);
             CloseAccessibility(token);
             Volatile.Write(ref route.Token, 0);
+            route.Window.Surface.SetNativeControlSurface(0);
             route.Window.Surface.SetInputMethodActive(false);
             _surfaceOffset = default;
             _hasSurfaceOffset = false;
@@ -162,15 +176,25 @@ public sealed partial class OpenHarmonyHost
         CloseAccessibility(token);
         _childSurfaces.Remove(token);
         Volatile.Write(ref route.Token, 0);
+        route.Window.Surface.SetNativeControlSurface(0);
         ResetChildInsets(route);
         RefreshChildInsets(route);
         RefreshChildInputMethod(route);
         route.Window.ReportSurfaceUnavailable();
     });
 
-    /// <summary>Reports the native child window ID and frame in display-local physical coordinates.</summary>
+    /// <summary>Reports the stage (key 0) or child frame in display-local physical coordinates.</summary>
     public void ReportChildFrame(int key, int windowId, long displayId, PixelRect frame) => Post(() =>
     {
+        if (key == 0)
+        {
+            if (_stageCanOpen && _stageDesktop && frame.Width > 0 && frame.Height > 0)
+            {
+                _stageFrameSize = frame.Size;
+                SetWindowPositionCore(displayId, frame.Position);
+            }
+            return;
+        }
         if (!_children.TryGetValue(key, out var route))
             return;
         route.PlatformId = windowId;
@@ -180,15 +204,12 @@ public sealed partial class OpenHarmonyHost
         RefreshChildInputMethod(route);
     });
 
-    /// <summary>Reports actual visibility, focus or disposal of a native child window.</summary>
+    /// <summary>Reports native child lifecycle or stage window state (key 0).</summary>
     public void ReportChildEvent(int key, OpenHarmonyChildWindowEvent state) => Post(() =>
     {
         if (key == 0)
         {
-            if (state == OpenHarmonyChildWindowEvent.StageCreated)
-                _stageCanOpen = true;
-            else if (state == OpenHarmonyChildWindowEvent.Destroyed)
-                DestroyStage();
+            ReportStageEvent(state);
             return;
         }
         if (!_children.TryGetValue(key, out var route))
@@ -221,6 +242,48 @@ public sealed partial class OpenHarmonyHost
         CancelUnavailableInboundDrag();
     });
 
+    private void ReportStageEvent(OpenHarmonyChildWindowEvent state)
+    {
+        switch (state)
+        {
+            case OpenHarmonyChildWindowEvent.StageCreated:
+                _stageCanOpen = true;
+                return;
+            case OpenHarmonyChildWindowEvent.Destroyed:
+                DestroyStage();
+                return;
+        }
+        if (!_stageCanOpen)
+            return;
+        if (state == OpenHarmonyChildWindowEvent.StageDesktopAvailable)
+        {
+            _stageDesktop = true;
+            _stageRoute?.Window.ReportStageDesktop(true);
+            return;
+        }
+
+        var observed = state switch
+        {
+            OpenHarmonyChildWindowEvent.StageDesktopUnavailable or OpenHarmonyChildWindowEvent.StageNormal => WindowState.Normal,
+            OpenHarmonyChildWindowEvent.StageMaximized => WindowState.Maximized,
+            OpenHarmonyChildWindowEvent.StageMinimized => WindowState.Minimized,
+            OpenHarmonyChildWindowEvent.StageFullScreen => WindowState.FullScreen,
+            _ => (WindowState?)null
+        };
+        if (!_stageDesktop || observed is null)
+            return;
+        if (state == OpenHarmonyChildWindowEvent.StageDesktopUnavailable)
+        {
+            _stageDesktop = false;
+            _stageFrameSize = null;
+            _stageRoute?.Window.ReportStageDesktop(false);
+            UpdateSurfaceOrigin();
+        }
+        _stageWindowState = observed.Value;
+        _stageRoute?.Window.ReportWindowState(observed.Value);
+        RefreshRendering();
+    }
+
     /// <summary>Returns true if Avalonia cancels the native title-bar close. Call off the ArkTS UI thread.</summary>
     public bool RequestChildClose(int key)
     {
@@ -252,6 +315,9 @@ public sealed partial class OpenHarmonyHost
     private void DestroyStage()
     {
         _stageCanOpen = false;
+        _stageDesktop = false;
+        _stageWindowState = WindowState.Normal;
+        _stageFrameSize = null;
         foreach (var child in _children.Values.ToArray())
             child.Window.ReportDestroyed();
         _stageRoute?.Window.ReportDestroyed();
@@ -359,6 +425,8 @@ public sealed partial class OpenHarmonyHost
                 OpenHarmonyChildWindowOperation.SetDecorations => "setDecorations",
                 OpenHarmonyChildWindowOperation.SetResizable => "setResizable",
                 OpenHarmonyChildWindowOperation.SetLimits => "setLimits",
+                OpenHarmonyChildWindowOperation.SetState => "setState",
+                OpenHarmonyChildWindowOperation.SetCaptionButtons => "setCaptionButtons",
                 _ => throw new ArgumentOutOfRangeException(nameof(request))
             });
             if (request.Position is { } position)
@@ -377,6 +445,13 @@ public sealed partial class OpenHarmonyHost
             json.WriteBoolean("decorated", request.Decorated);
             if (request.Resizable is { } resizable)
                 json.WriteBoolean("resizable", resizable);
+            if (request.State is { } state)
+                json.WriteString("state", state.ToString().ToLowerInvariant());
+            if (request.Operation == OpenHarmonyChildWindowOperation.SetCaptionButtons)
+            {
+                json.WriteBoolean("canMinimize", request.CanMinimize);
+                json.WriteBoolean("canMaximize", request.CanMaximize);
+            }
             if (request.Limits is { } limits)
             {
                 json.WriteStartObject("limits");

@@ -11,7 +11,8 @@ import { AvaloniaTextDragSource } from '../components/AvaloniaTextDragSource';
 
 export function registerSystemRequests(context: common.UIAbilityContext, mainWindow?: window.Window,
   stage?: window.WindowStage, enableChildAccessibility: boolean = false,
-  enableChildInboundDrop: boolean = false, enableChildTextDragSource: boolean = false): () => void {
+  enableChildInboundDrop: boolean = false, enableChildTextDragSource: boolean = false,
+  trayRequests?: (operation: string, argument: string) => Promise<string | null>): () => void {
   const windowInsets = mainWindow === undefined ? undefined : new WindowInsetsRequests(mainWindow);
   const children = mainWindow === undefined || stage === undefined ? undefined
     : new ChildWindows(stage, mainWindow, enableChildAccessibility, enableChildInboundDrop, enableChildTextDragSource);
@@ -27,6 +28,8 @@ export function registerSystemRequests(context: common.UIAbilityContext, mainWin
       request = children.execute(argument).then((value: string | null): void => finish(value));
     } else if (operation.startsWith('window.') && windowInsets !== undefined) {
       request = windowInsets.execute(operation, argument).then((value: string | null): void => finish(value));
+    } else if (operation.startsWith('tray.') && trayRequests !== undefined) {
+      request = trayRequests(operation, argument).then((value: string | null): void => finish(value));
     } else {
       request = executeLauncherRequest(context, operation, argument).then((value: string | null): void => finish(value));
     }

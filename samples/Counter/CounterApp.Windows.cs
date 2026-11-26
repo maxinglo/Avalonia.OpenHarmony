@@ -32,8 +32,102 @@ public sealed partial class CounterApp
                 Trace($"Stage native handle {handle.HandleDescriptor}: {handle.Handle}");
             MakeChild("Constrained child", false, constrained: true).Show(owner);
         };
-        return (new WrapPanel { Children = { open, dialog, policies } },
-            [("Open owned window", open), ("Open modal dialog", dialog), ("Open constrained window", policies)]);
+        var (stageButtons, stageTargets) = StageWindowButtons();
+        return (new StackPanel { Spacing = 8, Children = { stageButtons, new WrapPanel { Children = { open, dialog, policies } } } },
+            [.. stageTargets, ("Open owned window", open), ("Open modal dialog", dialog), ("Open constrained window", policies)]);
+    }
+
+    private static (Control Buttons, (string Name, Control Element)[] Targets) StageWindowButtons()
+    {
+        var panel = new WrapPanel();
+        var targets = new List<(string, Control)>();
+        Add("Stage minimize", window => SetState(window, WindowState.Minimized));
+        Add("Stage maximize", window => SetState(window, WindowState.Maximized));
+        Add("Stage normal", window => SetState(window, WindowState.Normal));
+        Add("Stage fullscreen", window => SetState(window, WindowState.FullScreen));
+        Add("Stage resize", window =>
+        {
+            var width = window.ClientSize.Width > 650 ? 620 : 720;
+            Trace($"Stage resize requested: width {width}");
+            window.Width = width;
+        });
+        Add("Stage caption policy", window =>
+        {
+            window.CanMinimize = !window.CanMinimize;
+            window.CanMaximize = window.CanMinimize;
+            Trace($"Stage caption policy requested: minimize {window.CanMinimize}, maximize {window.CanMaximize}");
+        });
+
+        Window? owner = null;
+        WindowState? lastState = null;
+        panel.AttachedToVisualTree += (_, _) =>
+        {
+            if (TopLevel.GetTopLevel(panel) is not Window window)
+                return;
+            owner = window;
+            lastState = window.WindowState;
+            window.PropertyChanged += StateChanged;
+            window.PositionChanged += PositionChanged;
+            window.Resized += Resized;
+            Report(window, "attached");
+        };
+        panel.DetachedFromVisualTree += (_, _) =>
+        {
+            if (owner is not { } window)
+                return;
+            window.PropertyChanged -= StateChanged;
+            window.PositionChanged -= PositionChanged;
+            window.Resized -= Resized;
+            Report(window, "detached");
+            owner = null;
+        };
+        return (panel, targets.ToArray());
+
+        void Add(string name, Action<Window> action)
+        {
+            var button = new Button { Content = name };
+            button.Click += (_, _) =>
+            {
+                if (TopLevel.GetTopLevel(button) is Window window)
+                    action(window);
+            };
+            panel.Children.Add(button);
+            targets.Add((name, button));
+        }
+
+        static void SetState(Window window, WindowState state)
+        {
+            Trace($"Stage state requested: {state}");
+            window.WindowState = state;
+        }
+
+        void StateChanged(object? sender, AvaloniaPropertyChangedEventArgs args)
+        {
+            if (args.Property == Window.WindowStateProperty && owner is { } window && lastState != window.WindowState)
+            {
+                lastState = window.WindowState;
+                Report(window, "state changed");
+            }
+        }
+
+        void PositionChanged(object? sender, PixelPointEventArgs args)
+        {
+            if (owner is { } window)
+                Report(window, "moved");
+        }
+
+        void Resized(object? sender, WindowResizedEventArgs args)
+        {
+            if (owner is { } window)
+                Report(window, $"resized ({args.Reason})");
+        }
+
+        static void Report(Window window, string change)
+        {
+            Trace($"Stage {change}: owner {System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(window)}, " +
+                $"native {window.TryGetPlatformHandle()?.Handle}, {window.WindowState}, " +
+                $"position {window.Position}, frame {window.FrameSize}, client {window.ClientSize}");
+        }
     }
 
     private static Window MakeChild(string title, bool modal, bool constrained = false)

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -7,16 +8,64 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 
 var errors = new ConcurrentQueue<string>();
+var requests = new ConcurrentQueue<JsonElement>();
 var host = new OpenHarmonyHost(() => AppBuilder.Configure<ProbeApp>().With(new OpenHarmonyWindowOptions
-    { Request = (_, _) => Task.FromResult(new OpenHarmonySystemResult(string.Empty, null)) }),
+    {
+        Request = (_, value) =>
+        {
+            using var request = JsonDocument.Parse(value);
+            requests.Enqueue(request.RootElement.Clone());
+            return Task.FromResult(new OpenHarmonySystemResult(string.Empty, null));
+        }
+    }),
     (_, _, _, _, _) => { }, errors.Enqueue);
 await host.Ready.WaitAsync(TimeSpan.FromSeconds(10));
 await Dispatcher.UIThread.InvokeAsync(async () =>
 {
+    var floatingFrame = new PixelRect(48, 32, 810, 640);
+    host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageCreated);
+    host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageDesktopAvailable);
+    host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageNormal);
+    host.ReportChildFrame(0, 7, 1, floatingFrame);
     host.UpdateSurface(1, 800, 600, 1);
     await Flush();
     var window = (Window)TopLevel.GetTopLevel(ProbeApp.Main)!;
     Check(window.IsActive, "Initially active window");
+    Check(window.Position == floatingFrame.Position && window.FrameSize == new Size(810, 640),
+        "The initial desktop stage uses its native frame before the surface attaches");
+    window.Width = 820;
+    await Flush();
+    Check(requests.TryDequeue(out var resize) && resize.GetProperty("operation").GetString() == "resize" &&
+        resize.GetProperty("width").GetInt32() == 830 && resize.GetProperty("height").GetInt32() == 640,
+        "A width-only resize preserves the native frame height outside the Avalonia surface");
+    window.WindowState = WindowState.Maximized;
+    window.WindowState = WindowState.Maximized;
+    Check(window.WindowState == WindowState.Normal && requests.Count == 1 && requests.TryDequeue(out var request) &&
+        request.GetProperty("id").GetInt32() == 0 && request.GetProperty("state").GetString() == "maximized",
+        "Repeated managed maximize writes queue one request and retain the observed normal state");
+    host.ReportChildFrame(0, 7, 1, new PixelRect(0, 0, 1000, 800));
+    host.UpdateSurface(1, 990, 760, 1);
+    host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageMaximized);
+    await Flush();
+    Check(window.WindowState == WindowState.Maximized && window.Position == default && window.FrameSize == new Size(1000, 800),
+        "The native maximize notification updates the managed state and frame");
+    window.WindowState = WindowState.Maximized;
+    Check(requests.IsEmpty, "Repeating the observed maximize state sends no additional command");
+
+    host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageMinimized);
+    host.DestroySurface(1);
+    await Flush();
+    Check(window.WindowState == WindowState.Minimized && !window.IsActive &&
+        ReferenceEquals(window, TopLevel.GetTopLevel(ProbeApp.Main)), "Minimize and surface detach preserve the stage owner");
+    host.ReportChildFrame(0, 7, 1, floatingFrame);
+    host.UpdateSurface(3, 800, 600, 1);
+    host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageNormal);
+    host.SetLifecycle(OpenHarmonyLifecycleEvent.WindowActive);
+    await Flush();
+    Check(ReferenceEquals(window, TopLevel.GetTopLevel(ProbeApp.Main)) && window.IsActive && window.WindowState == WindowState.Normal &&
+        window.Position == floatingFrame.Position && window.FrameSize == new Size(810, 640),
+        "Native restoration observes the same owner and exact floating frame after surface replacement");
+
     var lifetime = (IActivatableLifetime)Application.Current!.ApplicationLifetime!;
     var activated = 0;
     var deactivated = 0;
