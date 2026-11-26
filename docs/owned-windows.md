@@ -23,7 +23,8 @@ disables its owner's input while the dialog is open.
   tree includes this page and transfers the generated window key using local storage.
 - Export `avaoh_update_child_surface`, `avaoh_close_child_surface`, `avaoh_report_child_frame`,
   `avaoh_report_child_event`, and `avaoh_request_child_close` from the NativeAOT application.
-  Counter implements these callbacks in `samples/Counter/Program.Windows.cs`.
+  Key `0` carries stage notifications and geometry, including events before the first
+  XComponent surface is created. Counter implements these callbacks in `samples/Counter/Program.Windows.cs`.
 - To provide child safe area and fixed-keyboard occlusion, export `avaoh_set_child_avoid_area`
   as in `samples/Counter/Program.Insets.cs`.
 - Run the Counter build with `-Windowed`. The HAP is placed in the `windowed` subdirectory
@@ -35,6 +36,30 @@ by the stage. Window decorations and availability depend on the device's window 
 A device that rejects a frame at creation can create a child with platform-default geometry.
 Standalone top levels, owners other than the stage, and custom move and resize drags
 need separate support.
+
+## Desktop stage window state
+
+In HarmonyOS freeform window mode, the managed stage supports `WindowState.Normal`,
+`Maximized`, `Minimized`, and `FullScreen`. Assigning `WindowState` queues a native request.
+The getter and property notifications follow the window manager’s observed state, including
+changes made with the native title bar and Dock. The two expanded states use the normal maximized
+layout and the immersive full-screen layout respectively. HarmonyOS `recover()` restores its saved
+floating size and position. A minimized stage can return from the Dock. HarmonyOS restricts
+programmatic restoration from minimization to a foreground UIAbility.
+[HarmonyOS Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
+
+Stage width and height in DIP can request a new client size when the stage is floating. The window
+manager applies the native frame and size restrictions. `CanResize` controls native edge dragging.
+`CanMinimize` and `CanMaximize` control the corresponding native caption buttons. The stage and its
+managed content remain attached across a minimize or a new XComponent surface. These state and
+caption controls apply to the main stage in freeform window mode. Child windows continue to follow
+the dedicated child-window visibility, geometry and close APIs.
+
+In the windowed Counter, the **Stage minimize**, **Stage maximize**, **Stage normal**,
+**Stage fullscreen**, **Stage resize**, and **Stage caption policy** controls issue those requests.
+Counter logs observed state, position, client and frame sizes, and both the managed and native
+window identities. `tests/LifecycleProbe` covers managed notification and surface replacement;
+the ArkTS `WindowCloseProbe` also checks desktop request routing with injected native behavior.
 
 ## Child window policies and interop
 

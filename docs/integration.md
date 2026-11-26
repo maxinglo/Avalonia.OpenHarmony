@@ -37,6 +37,8 @@ Apps can host the HarmonyOS security `PasteButton` alongside the surface. In its
 Apps can opt into receiving plain text and read-only files from system drag and drop on embedded and
 owned window surfaces. [Drag and drop integration](drag-and-drop.md)
 
+HarmonyOS PCs can host an Avalonia tray icon and its native context menu. [Status bar integration](status-bar.md)
+
 ### System input method
 
 Pass a native window ID provider as the fourth constructor argument to enable the HarmonyOS input method. Call
