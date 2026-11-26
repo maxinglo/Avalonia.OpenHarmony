@@ -25,9 +25,12 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     private PixelPoint? _requestedPosition;
     private PixelSize? _requestedFrameSize;
     private Size _initialClientSize;
+    private Size _minClientSize;
+    private Size _maxClientSize = Size.Infinity;
     private PixelRect? _frame;
     private string? _title;
     private bool _decorated = true;
+    private bool _resizable = true;
     private bool _enabled = true;
     private bool _showRequested;
     private bool _shownModally;
@@ -70,7 +73,7 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     internal bool IsCloseRequested => _closeRequested;
     internal long ZOrder { get; private set; }
     private bool CanRender => _framebufferAvailable && _visible && _avaloniaVisible && !_closeRequested && !_disposed;
-    public IPlatformHandle? Handle => Surface.Handle;
+    public IPlatformHandle? Handle => _closeRequested ? null : Surface.Handle;
     public Size ClientSize => _hasSurfaceGeometry ? Surface.ClientSize : _initialClientSize;
     public Size? FrameSize => _frame is { } frame
         ? new Size(frame.Width / DesktopScaling, frame.Height / DesktopScaling)
@@ -143,7 +146,9 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             Title = _title,
             Modal = isDialog,
             Activate = activate,
-            Decorated = _decorated
+            Decorated = _decorated,
+            Resizable = _resizable ? null : false,
+            Limits = GetWindowLimits(DesktopScaling)
         });
     }
 
@@ -187,7 +192,20 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetTitle) { Title = title });
     }
 
-    public void SetWindowDecorations(WindowDecorations enabled) => _decorated = enabled != WindowDecorations.None;
+    public void SetWindowDecorations(WindowDecorations enabled)
+    {
+        var decorated = enabled != WindowDecorations.None;
+        if (_decorated == decorated)
+            return;
+        _decorated = decorated;
+        if (!IsStage && _showRequested)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetDecorations)
+            {
+                Decorated = decorated,
+                Resizable = _resizable,
+                Limits = GetWindowLimits(DesktopScaling)
+            });
+    }
 
     public void Resize(Size clientSize, WindowResizeReason reason = WindowResizeReason.Application)
     {
@@ -222,10 +240,25 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     public void SetTopmost(bool value) { }
     public void SetIcon(IWindowIconImpl? icon) { }
     public void ShowTaskbarIcon(bool value) { }
-    public void CanResize(bool value) { }
+    public void CanResize(bool value)
+    {
+        if (_resizable == value)
+            return;
+        _resizable = value;
+        if (!IsStage && _showRequested)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetResizable) { Resizable = value });
+    }
     public void SetCanMinimize(bool value) { }
     public void SetCanMaximize(bool value) { }
-    public void SetMinMaxSize(Size minSize, Size maxSize) { }
+    public void SetMinMaxSize(Size minSize, Size maxSize)
+    {
+        if (_minClientSize == minSize && _maxClientSize == maxSize)
+            return;
+        _minClientSize = minSize;
+        _maxClientSize = maxSize;
+        if (!IsStage && _showRequested)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetLimits) { Limits = GetWindowLimits(DesktopScaling) ?? default(OpenHarmonyWindowLimits) });
+    }
     public void SetExtendClientAreaToDecorationsHint(bool extendIntoClientAreaHint) { }
     public void SetExtendClientAreaTitleBarHeightHint(double titleBarHeight) { }
     public void BeginMoveDrag(PointerPressedEventArgs e) { }
@@ -267,8 +300,11 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
             : WindowResizeReason.Unspecified;
         if (_frame?.Size == _requestedFrameSize)
             _requestedFrameSize = null;
+        var previousScaling = DesktopScaling;
         _hasSurfaceGeometry = true;
         Surface.Resize(width, height, scaling);
+        if (!IsStage && _showRequested && previousScaling != scaling && GetWindowLimits(scaling) is { } limits)
+            Enqueue(new(Id, OpenHarmonyChildWindowOperation.SetLimits) { Limits = limits });
         _framebufferAvailable = true;
         RefreshActivation();
         Paint?.Invoke(new Rect(ClientSize));
@@ -437,6 +473,19 @@ internal sealed class OpenHarmonyChildWindow : IWindowImpl, IFramebufferPlatform
     }
 
     private static int ToPixelCount(double pixels) => (int)Math.Clamp(Math.Ceiling(pixels), 1, int.MaxValue);
+
+    private OpenHarmonyWindowLimits? GetWindowLimits(double scaling)
+    {
+        var minWidth = _minClientSize.Width > 0 ? ToPixelCount(_minClientSize.Width * scaling) : (int?)null;
+        var minHeight = _minClientSize.Height > 0 ? ToPixelCount(_minClientSize.Height * scaling) : (int?)null;
+        var maxWidth = GetMaximum(_maxClientSize.Width, minWidth);
+        var maxHeight = GetMaximum(_maxClientSize.Height, minHeight);
+        return minWidth.HasValue || minHeight.HasValue || maxWidth.HasValue || maxHeight.HasValue
+            ? new(minWidth, minHeight, maxWidth, maxHeight) : null;
+
+        int? GetMaximum(double size, int? minimum) => double.IsFinite(size)
+            ? (int)Math.Clamp(Math.Floor(size * scaling), minimum ?? 1, int.MaxValue) : null;
+    }
 
     private void Enqueue(OpenHarmonyChildWindowRequest command)
     {

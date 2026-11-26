@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <vector>
 #include <window_manager/oh_display_manager.h>
 
@@ -107,6 +108,61 @@ inline void PublishDisplays(DisplayCallback callback)
     // The managed callback copies the names before the SDK's snapshot is released.
     callback(snapshots.data(), static_cast<int32_t>(snapshots.size()));
     OH_NativeDisplayManager_DestroyAllDisplays(displays);
+}
+
+// The system callback can arrive off the ArkUI thread. Serialize snapshots and
+// wait for an in-flight callback before detaching the managed callback.
+inline std::mutex displayPublishMutex;
+inline DisplayCallback displayObserver = nullptr;
+inline uint32_t availableAreaListener = 0;
+inline bool availableAreaListenerRegistered = false;
+
+inline void PublishDisplaysSynchronized(DisplayCallback callback)
+{
+    std::lock_guard<std::mutex> lock(displayPublishMutex);
+    if (callback != nullptr)
+        PublishDisplays(callback);
+}
+
+inline void PublishObservedDisplays()
+{
+    std::lock_guard<std::mutex> lock(displayPublishMutex);
+    if (displayObserver != nullptr)
+        PublishDisplays(displayObserver);
+}
+
+inline void OnAvailableAreaChanged(uint64_t)
+{
+    PublishObservedDisplays();
+}
+
+// Start and stop are called on the ArkUI thread.
+inline bool StartAvailableAreaObservation(DisplayCallback callback)
+{
+    if (callback == nullptr)
+        return false;
+    {
+        std::lock_guard<std::mutex> lock(displayPublishMutex);
+        displayObserver = callback;
+    }
+    if (!availableAreaListenerRegistered) {
+        availableAreaListenerRegistered = OH_NativeDisplayManager_RegisterAvailableAreaChangeListener(
+            OnAvailableAreaChanged, &availableAreaListener) == DISPLAY_MANAGER_OK;
+    }
+    if (!availableAreaListenerRegistered) {
+        std::lock_guard<std::mutex> lock(displayPublishMutex);
+        displayObserver = nullptr;
+    }
+    return availableAreaListenerRegistered;
+}
+
+inline void StopAvailableAreaObservation()
+{
+    if (availableAreaListenerRegistered &&
+        OH_NativeDisplayManager_UnregisterAvailableAreaChangeListener(availableAreaListener) == DISPLAY_MANAGER_OK)
+        availableAreaListenerRegistered = false;
+    std::lock_guard<std::mutex> lock(displayPublishMutex);
+    displayObserver = nullptr;
 }
 
 } // namespace avalonia

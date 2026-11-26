@@ -8,7 +8,10 @@ internal enum OpenHarmonyChildWindowOperation
     Activate,
     Resize,
     Move,
-    SetTitle
+    SetTitle,
+    SetDecorations,
+    SetResizable,
+    SetLimits
 }
 
 internal readonly record struct OpenHarmonyChildWindowRequest(long Id, OpenHarmonyChildWindowOperation Operation)
@@ -19,4 +22,8 @@ internal readonly record struct OpenHarmonyChildWindowRequest(long Id, OpenHarmo
     public bool Modal { get; init; }
     public bool Activate { get; init; }
     public bool Decorated { get; init; }
+    public bool? Resizable { get; init; }
+    public OpenHarmonyWindowLimits? Limits { get; init; }
 }
+
+internal readonly record struct OpenHarmonyWindowLimits(int? MinWidth, int? MinHeight, int? MaxWidth, int? MaxHeight);

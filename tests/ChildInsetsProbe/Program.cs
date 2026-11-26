@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Platform;
 using Avalonia.Input;
+using Avalonia.Media.Imaging;
 using Avalonia.OpenHarmony;
 using Avalonia.Threading;
 
@@ -20,7 +21,7 @@ OpenHarmonyWindowOptions options = new()
     }
 };
 var host = new OpenHarmonyHost(() => AppBuilder.Configure<ProbeApp>().With(options),
-    (_, _, _, _, _) => { }, errors.Enqueue);
+    (_, _, _, _, _) => { }, errors.Enqueue, () => 87);
 await host.Ready.WaitAsync(TimeSpan.FromSeconds(10));
 await Dispatcher.UIThread.InvokeAsync(() => RunAsync(host)).WaitAsync(TimeSpan.FromSeconds(10));
 Check(errors.IsEmpty, string.Join(Environment.NewLine, errors));
@@ -40,11 +41,16 @@ static async Task RunAsync(OpenHarmonyHost host)
     await FlushAsync();
     var stage = (Window)TopLevel.GetTopLevel(ProbeApp.Main)!;
     Check(stage.InsetsManager!.SafeAreaPadding.Top == 15, "Stage inset initial value");
+    Check(stage.TryGetPlatformHandle() is { HandleDescriptor: "OH_WindowManager window ID" } handle &&
+        handle.Handle == 87, "Stage exposes the native window ID");
+    VerifyWindowIcon();
 
     var first = new Window();
     first.Show(stage);
     var second = new Window();
     second.Show(stage);
+    Check(first.TryGetPlatformHandle() is null && second.TryGetPlatformHandle() is null,
+        "A child only exposes a handle after its native ID arrives");
     var firstInsets = first.InsetsManager!;
     var firstPane = first.InputPane!;
     var secondPane = second.InputPane!;
@@ -61,6 +67,8 @@ static async Task RunAsync(OpenHarmonyHost host)
     Check(secondPane.State == InputPaneState.Closed && secondPane.OccludedRect == default &&
         stage.InputPane!.State == InputPaneState.Closed && stage.InsetsManager.SafeAreaPadding.Top == 15,
         "Device inset events are isolated by window and focus");
+    Check(first.TryGetPlatformHandle()?.Handle == 101 && second.TryGetPlatformHandle()?.Handle == 102,
+        "Each child exposes its WindowManager ID independently of the XComponent token");
 
     host.UpdateChildSurface(1, firstToken, 400, 288, 1);
     await FlushAsync();
@@ -96,6 +104,7 @@ static async Task RunAsync(OpenHarmonyHost host)
     await FlushAsync();
     Check(firstInsets.SafeAreaPadding == default && firstPane.State == InputPaneState.Closed,
         "Surface detach clears both features");
+    Check(first.TryGetPlatformHandle()?.Handle == 101, "The native child handle survives surface detachment");
 
     host.ReportChildEvent(2, OpenHarmonyChildWindowEvent.Focused);
     host.SetChildAvoidArea(secondToken, OpenHarmonyAvoidAreaKind.Cutout, childInset);
@@ -105,6 +114,7 @@ static async Task RunAsync(OpenHarmonyHost host)
     var secondInsets = second.InsetsManager!;
     second.Close();
     Check(secondPane.State == InputPaneState.Closed, "Managed close clears the pane before the native close reply");
+    Check(second.TryGetPlatformHandle() is null, "Managed close invalidates the public child handle immediately");
     host.SetChildAvoidArea(secondToken, OpenHarmonyAvoidAreaKind.Keyboard, keyboard);
     host.ReportChildEvent(2, OpenHarmonyChildWindowEvent.Destroyed);
     await FlushAsync();
@@ -114,8 +124,25 @@ static async Task RunAsync(OpenHarmonyHost host)
     void Attach(int key, long token, PixelPoint offset)
     {
         host.UpdateChildSurface(key, token, 400, 400, 2);
+        host.ReportChildFrame(key, 100 + key, 0, new PixelRect(0, 0, 400, 400));
         host.SetSurfaceOffset(token, offset);
         host.ReportChildEvent(key, OpenHarmonyChildWindowEvent.Shown);
+    }
+}
+
+static void VerifyWindowIcon()
+{
+    using var bitmap = new WriteableBitmap(new PixelSize(2, 3), new Vector(96, 96));
+    using var input = new MemoryStream();
+    bitmap.Save(input, PngBitmapEncoderOptions.Default);
+    input.Position = 0;
+    foreach (var icon in new[] { new WindowIcon(bitmap), new WindowIcon(input) })
+    {
+        using var output = new MemoryStream();
+        icon.Save(output);
+        output.Position = 0;
+        using var restored = new Bitmap(output);
+        Check(restored.PixelSize == bitmap.PixelSize, "WindowIcon stores a reusable PNG snapshot");
     }
 }
 

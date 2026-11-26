@@ -231,7 +231,7 @@ export struct AvaloniaSurfaceHost {
     this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
     if (this.enableTextDragSource) {
       this.surface.textDragSource = new AvaloniaTextDragSource(
-        (pointerId: number, text: string): Promise<boolean> => this.startTextDrag(pointerId, text));
+        (pointerId: number, texts: string[]): Promise<boolean> => this.startTextDrag(pointerId, texts));
     }
     if (this.enableAccessibility) {
       this.accessibilityActive = accessibility.isOpenAccessibilitySync();
@@ -259,12 +259,16 @@ export struct AvaloniaSurfaceHost {
       .backgroundColor(0x24549B).borderRadius(12)
   }
 
-  private async startTextDrag(pointerId: number, text: string): Promise<boolean> {
-    const plainText = new unifiedDataChannel.PlainText();
-    plainText.textContent = text;
+  private async startTextDrag(pointerId: number, texts: string[]): Promise<boolean> {
+    const data = new unifiedDataChannel.UnifiedData();
+    for (const text of texts) {
+      const record = new unifiedDataChannel.PlainText();
+      record.textContent = text;
+      data.addRecord(record);
+    }
     const info: dragController.DragInfo = {
       pointerId,
-      data: new unifiedDataChannel.UnifiedData(plainText)
+      data
     };
     try {
       const result = await this.getUIContext().getDragController().executeDrag((): void => this.textDragPreview(), info);

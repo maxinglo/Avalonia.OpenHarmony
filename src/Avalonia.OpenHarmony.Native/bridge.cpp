@@ -255,7 +255,20 @@ napi_value SetTheme(napi_env env, napi_callback_info info)
 napi_value RefreshDisplays(napi_env, napi_callback_info)
 {
     if (auto callback = App().setDisplays; callback != nullptr)
-        avalonia::PublishDisplays(callback);
+        avalonia::PublishDisplaysSynchronized(callback);
+    return nullptr;
+}
+
+napi_value StartDisplayObservation(napi_env env, napi_callback_info)
+{
+    napi_value result;
+    napi_get_boolean(env, avalonia::StartAvailableAreaObservation(App().setDisplays), &result);
+    return result;
+}
+
+napi_value StopDisplayObservation(napi_env, napi_callback_info)
+{
+    avalonia::StopAvailableAreaObservation();
     return nullptr;
 }
 
@@ -771,6 +784,8 @@ napi_value Init(napi_env env, napi_value exports)
         {"setLifecycle", nullptr, SetLifecycle, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setTheme", nullptr, SetTheme, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"refreshDisplays", nullptr, RefreshDisplays, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"startDisplayObservation", nullptr, StartDisplayObservation, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stopDisplayObservation", nullptr, StopDisplayObservation, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setWindowPosition", nullptr, SetWindowPosition, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSurfaceOffset", nullptr, SetSurfaceOffset, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setAvoidArea", nullptr, SetAvoidArea, nullptr, nullptr, nullptr, napi_default, nullptr},

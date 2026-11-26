@@ -1,6 +1,7 @@
 interface DragRequest {
   gesture: number;
-  text: string;
+  text?: string;
+  texts?: string[];
 }
 
 interface DragGesture {
@@ -20,9 +21,9 @@ let activeDrag: DragSession | undefined;
 
 export class AvaloniaTextDragSource {
   private contacts: Map<number, number> = new Map();
-  private startDrag: (pointerId: number, text: string) => Promise<boolean>;
+  private startDrag: (pointerId: number, texts: string[]) => Promise<boolean>;
 
-  constructor(startDrag: (pointerId: number, text: string) => Promise<boolean>) {
+  constructor(startDrag: (pointerId: number, texts: string[]) => Promise<boolean>) {
     this.startDrag = startDrag;
   }
 
@@ -69,11 +70,21 @@ export class AvaloniaTextDragSource {
     return canceled;
   }
 
-  static async execute(argument: string): Promise<string | null> {
+  static async execute(argument: string, multiple: boolean = false): Promise<string | null> {
     const request = JSON.parse(argument) as DragRequest;
-    if (!Number.isSafeInteger(request.gesture) || typeof request.text !== 'string' ||
-      request.text.length > 64 * 1024) {
+    const texts = multiple ? request.texts : typeof request.text === 'string' ? [request.text] : undefined;
+    if (!Number.isSafeInteger(request.gesture) || !Array.isArray(texts) || texts.length === 0 || texts.length > 32) {
       return null;
+    }
+    let units = 0;
+    for (const text of texts) {
+      if (typeof text !== 'string') {
+        return null;
+      }
+      units += text.length;
+      if (units > 64 * 1024) {
+        return null;
+      }
     }
     const gesture = eligibleGestures.get(request.gesture);
     if (gesture === undefined) {
@@ -94,7 +105,7 @@ export class AvaloniaTextDragSource {
         session.finish(copy);
       };
       try {
-        gesture.source.startDrag(gesture.pointerId, request.text).then(settle, (): void => settle(false));
+        gesture.source.startDrag(gesture.pointerId, texts).then(settle, (): void => settle(false));
       } catch (_error) {
         settle(false);
       }

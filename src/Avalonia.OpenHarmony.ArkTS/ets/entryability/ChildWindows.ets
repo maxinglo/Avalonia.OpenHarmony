@@ -24,6 +24,8 @@ interface WindowRequest {
   modal: boolean;
   activate: boolean;
   decorated: boolean;
+  resizable?: boolean;
+  limits?: window.WindowLimits;
 }
 
 export const childWindowPage: string = 'pages/AvaloniaChildWindow';
@@ -43,6 +45,7 @@ export class ChildWindows {
   private enableInboundDrop: boolean;
   private enableTextDragSource: boolean;
   private windows: Map<number, window.Window> = new Map();
+  private defaultLimits: Map<number, window.WindowLimits> = new Map();
   private closing: Map<number, Promise<boolean>> = new Map();
   private modalWindows: Set<number> = new Set();
   private active: boolean = true;
@@ -66,8 +69,11 @@ export class ChildWindows {
 
   async execute(argument: string): Promise<string | null> {
     const request = JSON.parse(argument) as WindowRequest;
-    if (!Number.isInteger(request.id) || request.id <= 0) {
+    if (!Number.isInteger(request.id) || request.id < 0) {
       return null;
+    }
+    if (request.id === 0) {
+      return request.operation === 'activate' && this.active && await this.activateStage() ? '' : null;
     }
 
     if (request.operation === 'close') {
@@ -108,10 +114,52 @@ export class ChildWindows {
       case 'setTitle':
         await child.setWindowTitle(request.title ?? '');
         break;
+      case 'setDecorations':
+        child.setWindowDecorVisible(request.decorated);
+        try {
+          if (request.resizable !== undefined) {
+            await this.setResizable(child, request.resizable);
+          }
+        } finally {
+          if (request.limits !== undefined) {
+            await this.setLimits(request.id, child, request.limits);
+          }
+          this.publishFrame(request.id, child);
+        }
+        break;
+      case 'setResizable':
+        if (request.resizable === undefined) {
+          return null;
+        }
+        await this.setResizable(child, request.resizable);
+        break;
+      case 'setLimits':
+        if (request.limits === undefined) {
+          return null;
+        }
+        await this.setLimits(request.id, child, request.limits);
+        break;
       default:
         return null;
     }
     return '';
+  }
+
+  private async activateStage(): Promise<boolean> {
+    if (this.main.isFocused()) {
+      return true;
+    }
+    if (!this.main.isWindowShowing() || this.modalWindows.size > 0) {
+      return false;
+    }
+    for (const key of this.windows.keys()) {
+      const child = this.windows.get(key);
+      if (child !== undefined && !this.closing.has(key) && child.isFocused()) {
+        await window.shiftAppWindowFocus(child.getWindowProperties().id, this.main.getWindowProperties().id);
+        return true;
+      }
+    }
+    return false;
   }
 
   private async show(request: WindowRequest, existing?: window.Window): Promise<boolean> {
@@ -177,6 +225,23 @@ export class ChildWindows {
         return false;
       }
       await this.showWindow(child, request.activate);
+      if (!this.active || this.windows.get(key) !== child) {
+        return false;
+      }
+      if (request.limits !== undefined) {
+        try {
+          await this.setLimits(key, child, request.limits);
+        } catch (error) {
+          this.warnClose(key, 'set size limits', error as Error);
+        }
+      }
+      if (request.resizable === false) {
+        try {
+          await this.setResizable(child, false);
+        } catch (error) {
+          this.warnClose(key, 'disable drag resize', error as Error);
+        }
+      }
       this.publishFrame(key, child);
       this.publishEvent(key, child, ChildEvent.Shown);
       return true;
@@ -260,6 +325,39 @@ export class ChildWindows {
   private warnClose(key: number, operation: string, error: Error): void {
     hilog.warn(0x0202, 'AvaloniaOHOS', 'Child window %{public}d %{public}s failed: %{public}s',
       key, operation, error.message);
+  }
+
+  private async setResizable(child: window.Window, resizable: boolean): Promise<void> {
+    if (child.getWindowDecorVisible()) {
+      await child.setResizeByDragEnabled(resizable);
+    } else {
+      await child.enableDrag(resizable);
+    }
+  }
+
+  private async setLimits(key: number, child: window.Window, limits: window.WindowLimits): Promise<void> {
+    let defaults = this.defaultLimits.get(key);
+    if (defaults === undefined) {
+      defaults = child.getWindowLimits();
+      this.defaultLimits.set(key, defaults);
+    }
+    const properties = child.getWindowProperties();
+    const frame = properties.windowRect;
+    const drawable = properties.drawableRect;
+    const horizontal = drawable.width > 0 ? Math.max(0, frame.width - drawable.width) : 0;
+    const vertical = drawable.height > 0 ? Math.max(0, frame.height - drawable.height) : 0;
+    const applied = await child.setWindowLimits({
+      minWidth: this.frameLimit(limits.minWidth, defaults.minWidth, horizontal),
+      minHeight: this.frameLimit(limits.minHeight, defaults.minHeight, vertical),
+      maxWidth: this.frameLimit(limits.maxWidth, defaults.maxWidth, horizontal),
+      maxHeight: this.frameLimit(limits.maxHeight, defaults.maxHeight, vertical)
+    });
+    hilog.info(0x0202, 'AvaloniaOHOS', 'Child window %{public}d native size limits %{public}d x %{public}d to %{public}d x %{public}d',
+      key, applied.minWidth ?? 0, applied.minHeight ?? 0, applied.maxWidth ?? 0, applied.maxHeight ?? 0);
+  }
+
+  private frameLimit(limit: number | undefined, defaultLimit: number | undefined, chrome: number): number | undefined {
+    return limit === undefined ? defaultLimit : Math.min(limit + chrome, 2147483647);
   }
 
   private async createWindow(name: string, options: window.SubWindowOptions): Promise<window.Window> {
@@ -351,6 +449,7 @@ export class ChildWindows {
   private closed(key: number, child: window.Window): void {
     if (this.windows.get(key) === child) {
       this.windows.delete(key);
+      this.defaultLimits.delete(key);
       this.modalWindows.delete(key);
       bridge.reportChildEvent(key, ChildEvent.Destroyed);
     }

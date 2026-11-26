@@ -356,6 +356,9 @@ public sealed partial class OpenHarmonyHost
                 OpenHarmonyChildWindowOperation.Resize => "resize",
                 OpenHarmonyChildWindowOperation.Move => "move",
                 OpenHarmonyChildWindowOperation.SetTitle => "setTitle",
+                OpenHarmonyChildWindowOperation.SetDecorations => "setDecorations",
+                OpenHarmonyChildWindowOperation.SetResizable => "setResizable",
+                OpenHarmonyChildWindowOperation.SetLimits => "setLimits",
                 _ => throw new ArgumentOutOfRangeException(nameof(request))
             });
             if (request.Position is { } position)
@@ -372,6 +375,21 @@ public sealed partial class OpenHarmonyHost
             json.WriteBoolean("modal", request.Modal);
             json.WriteBoolean("activate", request.Activate);
             json.WriteBoolean("decorated", request.Decorated);
+            if (request.Resizable is { } resizable)
+                json.WriteBoolean("resizable", resizable);
+            if (request.Limits is { } limits)
+            {
+                json.WriteStartObject("limits");
+                if (limits.MinWidth is { } minWidth)
+                    json.WriteNumber("minWidth", minWidth);
+                if (limits.MinHeight is { } minHeight)
+                    json.WriteNumber("minHeight", minHeight);
+                if (limits.MaxWidth is { } maxWidth)
+                    json.WriteNumber("maxWidth", maxWidth);
+                if (limits.MaxHeight is { } maxHeight)
+                    json.WriteNumber("maxHeight", maxHeight);
+                json.WriteEndObject();
+            }
             json.WriteEndObject();
         }
 

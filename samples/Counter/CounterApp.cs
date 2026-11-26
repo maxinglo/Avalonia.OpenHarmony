@@ -9,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Platform.Storage;
 using Avalonia.Themes.Simple;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 
 namespace Counter;
@@ -33,6 +34,12 @@ public sealed partial class CounterApp : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        if (this.TryGetFeature<IActivatableLifetime>() is { } activation)
+        {
+            activation.Activated += (_, args) => Trace($"Application activated: {args.Kind}");
+            activation.Deactivated += (_, args) => Trace($"Application deactivated: {args.Kind}");
+        }
+
         if (ApplicationLifetime is ISingleViewApplicationLifetime lifetime)
         {
             var text = new TextBlock { Text = "Count: 0", FontSize = 22 };
@@ -122,6 +129,7 @@ public sealed partial class CounterApp : Application
             var dropTarget = CounterDropTarget.Create(editor, ReportStatus);
 #if OHOS
             var dragSource = CreateTextDragSource(ReportStatus);
+            var (bitmapCursor, hiddenCursor) = CreateCursorTargets();
 #endif
             var content = new StackPanel
             {
@@ -137,12 +145,16 @@ public sealed partial class CounterApp : Application
                     dragSource,
 #endif
                     picker,
+#if OHOS
+                    new WrapPanel { Children = { bitmapCursor, hiddenCursor } },
+#endif
                     new WrapPanel { Children = { copy, open, save, folder, link, immersive } },
                     status
                 }
             };
 #if OHOS_COUNTER_WINDOWS
-            content.Children.Add(ChildWindowButtons());
+            var (windowButtons, windowTargets) = ChildWindowButtons();
+            content.Children.Add(windowButtons);
 #endif
             var border = new Border
             {
@@ -153,12 +165,16 @@ public sealed partial class CounterApp : Application
             border.AddHandler(InputElement.PointerWheelChangedEvent, (_, args) =>
                 Trace($"Wheel: {args.Delta.X:F2} {args.Delta.Y:F2}"),
                 RoutingStrategies.Tunnel, handledEventsToo: true);
-            ObserveTopLevel(border, ("Count button", button), ("Editor", editor), ("Drop target", dropTarget), ("ComboBox", picker),
+            ObserveTopLevel(border, [("Count button", button), ("Editor", editor), ("Drop target", dropTarget), ("ComboBox", picker),
                 ("Copy", copy), ("Open", open), ("Save", save), ("Folder", folder), ("Website", link),
 #if OHOS
-                ("Drag source", dragSource),
+                ("Drag source", dragSource), ("Bitmap cursor", bitmapCursor), ("Hidden cursor", hiddenCursor),
 #endif
-                ("Immersive", immersive));
+                ("Immersive", immersive),
+#if OHOS_COUNTER_WINDOWS
+                .. windowTargets
+#endif
+            ]);
             var surface = new Border { Child = border };
             TopLevel.SetAutoSafeAreaPadding(surface, true);
             lifetime.MainView = surface;
@@ -201,7 +217,16 @@ public sealed partial class CounterApp : Application
         TopLevel? current = null;
         string? lastLayout = null;
         void ScaleChanged(object? sender, EventArgs args) => Trace($"DPI scale: {current?.RenderScaling:F2}");
+        void PositionChanged(object? sender, PixelPointEventArgs args) => QueuePositions();
         void BackRequested(object? sender, RoutedEventArgs args) => Trace("System Back received");
+        void ScreensChanged(object? sender, EventArgs args)
+        {
+            if (current?.Screens is not { ScreenCount: > 0 } screens)
+                return;
+            var active = screens.ScreenFromTopLevel(current);
+            Trace($"Displays: {screens.ScreenCount}. Active bounds: {active?.Bounds}. " +
+                $"Work area: {active?.WorkingArea}. Scale: {active?.Scaling:F2}");
+        }
         void SafeAreaChanged(object? sender, SafeAreaChangedArgs args) => ReportSafeArea();
         void InputPaneChanged(object? sender, InputPaneStateEventArgs args) => ReportInputPane();
         void ReportSafeArea()
@@ -221,11 +246,16 @@ public sealed partial class CounterApp : Application
             {
                 current.ScalingChanged += ScaleChanged;
                 current.BackRequested += BackRequested;
+                if (current is Window window)
+                    window.PositionChanged += PositionChanged;
+                if (current.Screens is { } screens)
+                    screens.Changed += ScreensChanged;
                 if (current.InsetsManager is { } insets)
                     insets.SafeAreaChanged += SafeAreaChanged;
                 if (current.InputPane is { } pane)
                     pane.StateChanged += InputPaneChanged;
                 ScaleChanged(null, EventArgs.Empty);
+                ScreensChanged(null, EventArgs.Empty);
                 ReportSafeArea();
                 ReportInputPane();
             }
@@ -236,6 +266,10 @@ public sealed partial class CounterApp : Application
             {
                 current.ScalingChanged -= ScaleChanged;
                 current.BackRequested -= BackRequested;
+                if (current is Window window)
+                    window.PositionChanged -= PositionChanged;
+                if (current.Screens is { } screens)
+                    screens.Changed -= ScreensChanged;
                 if (current.InsetsManager is { } insets)
                     insets.SafeAreaChanged -= SafeAreaChanged;
                 if (current.InputPane is { } pane)
@@ -244,7 +278,7 @@ public sealed partial class CounterApp : Application
             current = null;
             lastLayout = null;
         };
-        content.LayoutUpdated += (_, _) =>
+        void ReportPositions()
         {
             if (current is null || targets.Any(target => target.Element.Bounds.Width <= 0))
                 return;
@@ -259,7 +293,9 @@ public sealed partial class CounterApp : Application
                 lastLayout = positions;
                 Trace($"Control positions: {positions}");
             }
-        };
+        }
+        void QueuePositions() => Dispatcher.UIThread.Post(ReportPositions, DispatcherPriority.Background);
+        content.LayoutUpdated += (_, _) => QueuePositions();
     }
 
     private static async Task OpenFileAsync(Control control, Action<string> report)

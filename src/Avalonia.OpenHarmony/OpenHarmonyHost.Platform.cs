@@ -158,6 +158,8 @@ public sealed partial class OpenHarmonyHost
         _applicationForeground = foreground;
         if (!foreground)
             SetWindowFocus(false);
+        else if (_windowFocused && _stageRoute is { } stage)
+            stage.Window.ReportFocus(true);
         RefreshRendering();
         foreach (var child in _children.Values.ToArray())
         {

@@ -4,7 +4,6 @@ using Avalonia.Controls.Embedding;
 using Avalonia.Controls.Platform;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
-using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Rendering;
@@ -28,6 +27,7 @@ public sealed partial class OpenHarmonyHost
     private readonly IStorageProvider? _storageProvider;
     private readonly SingleViewLifetime _lifetime = new();
     private Dispatcher? _dispatcher;
+    private OpenHarmonyRenderTimer? _renderTimer;
     private bool _stopped;
     private EmbeddableControlRoot? _root;
     private SurfaceTopLevel? _topLevel;
@@ -137,11 +137,11 @@ public sealed partial class OpenHarmonyHost
             if (_requestInsetsCommand is { } command)
                 _topLevel.Insets.SetRequestHandler(command, _reportError);
             _topLevel.Resize(width, height, scaling);
+            UpdateSurfaceOrigin();
             RefreshWindowInsets();
             _root = new EmbeddableControlRoot(_topLevel);
             _root.Content = _lifetime.MainView;
             _root.Prepare();
-            UpdateSurfaceOrigin();
             RefreshRendering();
         }
         catch
@@ -282,6 +282,10 @@ public sealed partial class OpenHarmonyHost
             _ready.TrySetException(exception);
             _reportError(exception.ToString());
         }
+        finally
+        {
+            _renderTimer?.Dispose();
+        }
     }
 
     private void InitializePlatform()
@@ -293,8 +297,10 @@ public sealed partial class OpenHarmonyHost
         locator.Bind<PlatformHotkeyConfiguration>().ToSingleton<PlatformHotkeyConfiguration>();
         if (locator.GetService<OpenHarmonyTextDragOptions>() is { } textDrag)
             locator.Bind<IPlatformDragSource>().ToConstant(new OpenHarmonyTextDragSource(textDrag.Request, _reportError));
-        locator.Bind<ICursorFactory>().ToSingleton<CursorFactory>();
-        locator.Bind<IRenderLoop>().ToConstant(RenderLoop.FromTimer(new UiThreadRenderTimer(60)));
+        locator.Bind<ICursorFactory>().ToSingleton<OpenHarmonyCursorFactory>();
+        locator.Bind<IPlatformIconLoader>().ToSingleton<OpenHarmonyIconLoader>();
+        _renderTimer = new OpenHarmonyRenderTimer(Dispatcher.UIThread, _reportError);
+        locator.Bind<IRenderLoop>().ToConstant(RenderLoop.FromTimer(_renderTimer));
         locator.Bind<IWindowingPlatform>().ToConstant(new OpenHarmonyChildWindowingPlatform(CreateOwnedWindow,
             () => _topLevel ?? throw new InvalidOperationException("The XComponent surface is not available.")));
         locator.Bind<IPlatformGraphics?>().ToFunc(() => _topLevel is { UsesEgl: true } ? _egl?.Graphics : null);
@@ -354,11 +360,6 @@ public sealed partial class OpenHarmonyHost
         public bool TryLeaveBackground() => false;
     }
 
-    private sealed class CursorFactory : ICursorFactory
-    {
-        public ICursorImpl GetCursor(StandardCursorType cursorType) => new OpenHarmonyCursor(cursorType);
-        public ICursorImpl CreateCursor(Bitmap cursor, PixelPoint hotSpot) => new OpenHarmonyCursor(StandardCursorType.Arrow);
-    }
 }
 
 public enum TouchPhase

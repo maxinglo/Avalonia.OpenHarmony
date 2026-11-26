@@ -8,6 +8,7 @@ const source = fs.readFileSync(path.resolve(__dirname, '../../src/Avalonia.OpenH
 const native = new Map();
 const calls = [];
 const events = [];
+const focusTransfers = [];
 const nativeTypes = { WINDOW_SHOWN: 1, WINDOW_HIDDEN: 4, WINDOW_DESTROYED: 5 };
 const missing = Object.assign(new Error('no window'), { code: 1300002 });
 const window = {
@@ -16,6 +17,10 @@ const window = {
   findWindow(name) {
     if (!native.has(name)) throw missing;
     return native.get(name);
+  },
+  async shiftAppWindowFocus(source, target) {
+    focusTransfers.push([source, target]);
+    main.focused = true;
   }
 };
 const bridge = {
@@ -25,7 +30,7 @@ const bridge = {
 };
 const dependencies = {
   '@kit.ArkUI': { window },
-  '@kit.PerformanceAnalysisKit': { hilog: { warn() {} } },
+  '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
   'libavalonia_ohos_bridge.so': { default: bridge }
 };
 const mod = { exports: {} };
@@ -47,12 +52,30 @@ class NativeWindow {
     this.behavior = behavior;
     this.listeners = new Map();
     this.visible = false;
+    this.focused = false;
     this.modal = !!options.isModal;
+    this.decorated = options.decorEnabled;
+    this.limits = { minWidth: 240, minHeight: 180, maxWidth: 1200, maxHeight: 900 };
     this.avoidanceEnabled = false;
     this.destroyCalls = 0;
   }
   on(type, callback) { this.listeners.set(type, callback); }
-  getWindowProperties() { return { id: 18, displayId: 0, windowRect: rect }; }
+  getWindowProperties() {
+    const drawableRect = this.decorated
+      ? { ...rect, width: 790, height: 560 } : rect;
+    return { id: 100 + Number(this.name.slice('AvaloniaChild'.length)), displayId: 0, windowRect: rect, drawableRect };
+  }
+  isFocused() { return this.focused; }
+  getWindowLimits() { return this.limits; }
+  async setWindowLimits(limits) {
+    if (this.behavior.limitsFail) throw new Error('limits unavailable');
+    this.limits = Object.assign({}, limits);
+    return this.limits;
+  }
+  getWindowDecorVisible() { return this.decorated; }
+  setWindowDecorVisible(value) { this.decorated = value; }
+  async setResizeByDragEnabled(value) { this.decoratedResize = value; }
+  async enableDrag(value) { this.undecoratedResize = value; }
   async setSystemAvoidAreaEnabled(value) {
     if (this.behavior.avoidanceFails) throw new Error('avoidance unavailable');
     this.avoidanceEnabled = value;
@@ -90,10 +113,16 @@ const stage = {
     return child;
   }
 };
-const main = { getWindowProperties: () => ({ windowRect: rect }) };
+const main = {
+  visible: true,
+  focused: true,
+  getWindowProperties: () => ({ id: 70, windowRect: rect }),
+  isFocused() { return this.focused; },
+  isWindowShowing() { return this.visible; }
+};
 const windows = new ChildWindows(stage, main, false);
-const send = (id, operation, modal = false) =>
-  windows.execute(JSON.stringify({ id, operation, activate: true, modal, decorated: false }));
+const send = (id, operation, modal = false, options = {}) =>
+  windows.execute(JSON.stringify({ id, operation, activate: true, modal, decorated: false, ...options }));
 const has = (key, event) => events.some(item => item[0] === key && item[1] === event);
 
 (async () => {
@@ -151,6 +180,52 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   assert.deepEqual(await Promise.all([send(5, 'close'), send(5, 'close')]), ['', '']);
   assert.equal(fifth.destroyCalls, 1);
   calls.push('Concurrent duplicate Close requests share one native destroy');
+
+  next = { destroyFails: 0 };
+  const limits = { minWidth: 300, maxHeight: 450 };
+  assert.equal(await send(7, 'show', false, { decorated: true, resizable: false, limits }), '');
+  const bounded = native.get('AvaloniaChild7');
+  assert.deepEqual(bounded.limits, { minWidth: 310, minHeight: 180, maxWidth: 1200, maxHeight: 490 });
+  assert.equal(bounded.decoratedResize, false);
+  assert.equal(await send(7, 'setDecorations', false, { limits, resizable: false }), '');
+  assert.equal(bounded.decorated, false);
+  assert.equal(bounded.undecoratedResize, false);
+  assert.deepEqual(bounded.limits, { minWidth: 300, minHeight: 180, maxWidth: 1200, maxHeight: 450 });
+  assert.equal(await send(7, 'setLimits', false, { limits: {} }), '');
+  assert.deepEqual(bounded.limits, { minWidth: 240, minHeight: 180, maxWidth: 1200, maxHeight: 900 });
+  assert.equal(await send(7, 'setResizable', false, { resizable: true }), '');
+  assert.equal(bounded.undecoratedResize, true);
+  assert.equal(await send(7, 'setDecorations', false, { decorated: true, resizable: true }), '');
+  assert.equal(bounded.decoratedResize, true);
+  assert.equal(await send(7, 'close'), '');
+  calls.push('Child size limits account for decorations and reset to the native defaults');
+
+  next = { destroyFails: 0, limitsFail: true };
+  assert.equal(await send(8, 'show', false, { limits }), '');
+  assert.equal(native.get('AvaloniaChild8').visible, true);
+  assert.equal(await send(8, 'close'), '');
+  calls.push('Unsupported initial limits leave a child open');
+
+  assert.equal(await send(0, 'activate'), '');
+  assert.equal(await send(0, 'close'), null);
+  main.focused = false;
+  assert.equal(await send(0, 'activate'), null);
+  next = { destroyFails: 0 };
+  assert.equal(await send(9, 'show'), '');
+  native.get('AvaloniaChild9').focused = true;
+  main.visible = false;
+  assert.equal(await send(0, 'activate'), null);
+  main.visible = true;
+  assert.equal(await send(0, 'activate'), '');
+  assert.deepEqual(focusTransfers, [[109, 70]]);
+  await send(9, 'close');
+  main.focused = false;
+  assert.equal(await send(10, 'show', true), '');
+  native.get('AvaloniaChild10').focused = true;
+  assert.equal(await send(0, 'activate'), null);
+  assert.equal(focusTransfers.length, 1);
+  await send(10, 'close');
+  calls.push('Stage activation only transfers focus from a known nonmodal window of this app');
 
   let finish;
   suspendCreate = new Promise(resolve => { finish = resolve; });

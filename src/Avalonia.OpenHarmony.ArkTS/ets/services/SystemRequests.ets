@@ -20,8 +20,9 @@ export function registerSystemRequests(context: common.UIAbilityContext, mainWin
     let request: Promise<void>;
     if (operation.startsWith('storage.')) {
       request = executeStorageRequest(context, operation, argument, finish);
-    } else if (operation === 'drag.text') {
-      request = AvaloniaTextDragSource.execute(argument).then((value: string | null): void => finish(value));
+    } else if (operation === 'drag.text' || operation === 'drag.texts') {
+      request = AvaloniaTextDragSource.execute(argument, operation === 'drag.texts')
+        .then((value: string | null): void => finish(value));
     } else if (operation === 'window.child' && children !== undefined) {
       request = children.execute(argument).then((value: string | null): void => finish(value));
     } else if (operation.startsWith('window.') && windowInsets !== undefined) {
