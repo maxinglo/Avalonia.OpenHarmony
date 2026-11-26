@@ -12,8 +12,9 @@ Counter enables both directions in the main and child surfaces.
 The XComponent assigns a new contact identity on each physical touch down and retains the corresponding ArkUI
 touch ID while the gesture is eligible. Avalonia carries the identity on the routed pressed event. The ArkUI
 handler resolves it in the originating component's UI context and executes the system drag with the original touch
-ID, a preview, and one UDMF plain-text record. The route accepts up to 64 KiB of UTF-8
-text. [HarmonyOS DragController](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-uicontext-dragcontroller/)
+ID, a preview, and one UDMF plain-text record for each text item in offer order. The route accepts up to
+32 records and 64 KiB of UTF-8 text in total.
+[HarmonyOS DragController](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-uicontext-dragcontroller/)
 
 A touch release, cancellation or focus loss revokes its ability to start a pending drag. Once ArkUI starts the
 drag, it owns completion and may take focus across windows. The result returns asynchronously as `Copy` on
@@ -37,7 +38,7 @@ The Windows control probe used Avalonia's public `DragDrop.DoDragDropAsync` with
 the Unicode and per-press identity across the bridge, and checked asynchronous completion and data disposal.
 The ArkTS state probe covered released, canceled, unfocused, stale and concurrent gestures, and source destruction.
 The Windows `tests/TextDragSourceProbe` regression covers file-only and mixed offer rejection, no reads on the
-rejected path, and successful Unicode text transport.
+rejected path, ordered Unicode text transport, and the combined record and byte limits.
 The API 26 ARM64 toolchain packaged the ArkTS and C++ bridge in a fixture with zero declared application permissions.
 ARM64 drag behavior needs a device check.
 DevEco API 26 x86_64 compiled and packaged the native bridge and ArkTS Counter. The Huawei_TripleFold emulator

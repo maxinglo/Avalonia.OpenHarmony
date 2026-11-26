@@ -33,8 +33,35 @@ disables its owner's input while the dialog is open.
 The windowed host uses software framebuffers and supports child windows directly owned
 by the stage. Window decorations and availability depend on the device's window mode.
 A device that rejects a frame at creation can create a child with platform-default geometry.
-Standalone top levels, owners other than the stage, and desktop controls such as custom
-title-bar drags and native min/max constraints need separate support.
+Standalone top levels, owners other than the stage, and custom move and resize drags
+need separate support.
+
+## Child window policies and interop
+
+An owned `Window` can set `MinWidth`, `MinHeight`, `MaxWidth`, and `MaxHeight`.
+The backend converts those client dimensions to physical pixels and adds the native
+frame decoration size before calling `setWindowLimits`. The native window manager
+applies its own limits as well. `CanResize` controls native edge dragging.
+`WindowDecorations` selects the title bar at creation. When the window has a native
+title bar, changes to this property call `setWindowDecorVisible` and reapply the
+current resizing policy. These operations depend on the device and window mode.
+The Counter's **Open constrained window** fixture starts with minimum and maximum
+dimensions and edge dragging disabled. Its buttons toggle the resize policy and the title bar.
+**Focus owner** requests focus for the main stage while the owned window is active.
+[HarmonyOS Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
+
+When the stage already has focus, `Activate()` needs no new focus operation. A visible stage can
+request focus from a modeless child that currently holds it through `WindowStage.shiftAppWindowFocus`.
+Pending modal windows keep focus in the modal route. [HarmonyOS WindowStage API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-windowstage/)
+
+`TryGetPlatformHandle()` exposes the WindowManager ID after the host supplies it, with
+the descriptor `OH_WindowManager window ID`. Its value is an integer identifier for
+OpenHarmony `OH_WindowManager_*` APIs that accept a window ID. The ID survives replacement
+of the XComponent surface. Reacquire it from the top level when needed and use it only
+while that window remains live.
+
+`WindowIcon` accepts Avalonia bitmaps, streams, and paths and saves a PNG snapshot.
+HarmonyOS supplies the native window icon from the application configuration.
 
 ## Child safe areas and keyboard occlusion
 

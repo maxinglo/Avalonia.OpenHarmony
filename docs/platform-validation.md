@@ -1,5 +1,42 @@
 # Platform verification
 
+See the [Avalonia interface matrix](platform-capabilities.md) for the current implementation scope.
+
+## API 26 PC acceptance
+
+Use one x86_64 MateBook Pro emulator throughout the run. Verify `const.ohos.apiversion=26`, `x86_64` in
+`const.product.cpu.abilist`, and `const.product.devicetype=2in1` through HDC. Test the windowed HAP first, then install
+the EGL HAP on the same emulator. Use each run's `Control positions` and the current WindowManager frames for input.
+
+| Check | Pass condition |
+| --- | --- |
+| Software, VSync and dispatcher | The `-Windowed` HAP receives the first NativeVSync callback, presents a software frame, and increments the main counter after a click. A local callback probe exercises timeout and unavailable-library fallback. |
+| Native owned windows | A modeless child has its own WindowManager frame. Its counter responds, **Move child** changes its position, **Resize child** changes its size, and closing it restores the owner. |
+| Modality | The modal child blocks a click on the owner, accepts one child counter click, and returns 1. The same owner accepts another click after the dialog closes. |
+| Native ID and sizing | **Open constrained window** reports distinct stage and child WindowManager IDs that match the system. Compare the reported limits with the actual native window size. Exercise the edge-resize toggle and title bar in the window modes that expose them. |
+| Pointer routing | Hover the bitmap, hidden, editor and default cursor targets with mouse input. Look for `32x24 hotspot=(7,5)`, `16x16`, `Text` and `Default` in the native result messages. For visual verification, compare the rendered point against the hotspot on a visible system pointer. |
+| EGL and lifecycle | The `-UseEgl` HAP presents an EGL frame. Minimize using the native PC title bar and reopen Counter. The same process reports background and foreground events and increments from 1 to 2. |
+
+On MateBook Pro, both HAPs received NativeVSync and presented a 2090 × 1213 frame. The windowed run moved the
+modeless child by 48 × 24 px and resized its native frame from 798 × 570 to 950 × 570 px. The modal returned 1 and
+the owner accepted input again. The stage and child handle IDs matched WindowManager. **Focus owner** transferred
+WindowManager focus from the still-open constrained child to the stage.
+
+With the title bar visible, the constrained child stayed at 798 × 602 px with edge resize disabled. The same
+drag reached the system limit of 987 px wide with edge resize enabled. Hiding and restoring the title bar
+changed the native frame height limits by 70 px. Counter reported one 3120 × 2080 display, a 3120 × 1955 work area
+and 1.90 scale. The native cursor calls accepted the bitmap, transparent bitmap, text and default cursor.
+The EGL run retained its process and count through native minimization and restoration. On this image the native
+modal keyboard-avoidance request was denied, and the dialog remained usable.
+
+Use `dotnet run --project tests/LifecycleProbe` for both window-focus event orders and synthetic two-display snapshots.
+The [cursor probe](hardware-input.md#verification) checks pixel format, alpha, exact hotspot and native resource release.
+The [text drag probe](text-drag-source.md#verification) checks ordered records and payload bounds. PC single-display
+results cover the active display only. Native multi-monitor hot-plug and cross-application delivery of several text records
+require their own device checks.
+
+## Huawei_TripleFold checks
+
 The Counter sample logs under `AvaloniaOHOS`. Its text field logs only lengths and decreases. It reports a fixed
 success message when it receives the sample clipboard value. The log also reports control positions and display scale.
 Input diagnostics identify IME attachment, keyboard status, commits and deletion requests. Hardware-key diagnostics
