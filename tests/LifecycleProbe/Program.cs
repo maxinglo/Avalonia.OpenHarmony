@@ -3,6 +3,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Media;
 using Avalonia.OpenHarmony;
 using Avalonia.Platform;
 using Avalonia.Styling;
@@ -19,10 +20,33 @@ var host = new OpenHarmonyHost(() => AppBuilder.Configure<ProbeApp>().With(new O
             return Task.FromResult(new OpenHarmonySystemResult(string.Empty, null));
         }
     }),
-    (_, _, _, _, _) => { }, errors.Enqueue);
+    (_, _, _, _, _) => { }, errors.Enqueue, null, PlatformThemeVariant.Light, null, null, 0xff123456);
 await host.Ready.WaitAsync(TimeSpan.FromSeconds(10));
 await Dispatcher.UIThread.InvokeAsync(async () =>
 {
+    var settings = Application.Current!.PlatformSettings!;
+    var colors = settings.GetColorValues();
+    Check(colors.AccentColor1 == Color.FromUInt32(0xff123456) && colors.AccentColor2 == colors.AccentColor1 &&
+        colors.AccentColor3 == colors.AccentColor1, "Initial system emphasis color reaches Avalonia");
+    var colorChanges = 0;
+    settings.ColorValuesChanged += (_, _) => colorChanges++;
+    host.SetAccent(0xff123456);
+    await Flush();
+    Check(colorChanges == 0, "Duplicate emphasis color does not raise a change");
+    host.SetAccent(0xffabcdef);
+    await Flush();
+    Check(colorChanges == 1 && settings.GetColorValues().AccentColor1 == Color.FromUInt32(0xffabcdef),
+        "System emphasis changes reach Avalonia once");
+    host.SetTheme(PlatformThemeVariant.Dark);
+    await Flush();
+    Check(colorChanges == 2 && settings.GetColorValues().ThemeVariant == PlatformThemeVariant.Dark &&
+        settings.GetColorValues().AccentColor1 == Color.FromUInt32(0xffabcdef),
+        "Theme changes retain the reported emphasis color");
+    var settingsLifetime = (IActivatableLifetime)Application.Current!.ApplicationLifetime!;
+    Check(!settingsLifetime.TryEnterBackground() && !settingsLifetime.TryLeaveBackground(),
+        "Asynchronous native transitions are not reported as synchronous successes");
+    host.SetTheme(PlatformThemeVariant.Light);
+    await Flush();
     var floatingFrame = new PixelRect(48, 32, 810, 640);
     host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageCreated);
     host.ReportChildEvent(0, OpenHarmonyChildWindowEvent.StageDesktopAvailable);
@@ -154,6 +178,27 @@ await Dispatcher.UIThread.InvokeAsync(async () =>
     await Flush();
     Check(changes == 2 && window.Screens.ScreenCount == 1 && second.Bounds == default,
         "Removing a display clears its old screen and raises an event");
+
+    host.UpdateDisplays([displays[0] with { Scaling = 1.9 }]);
+    host.UpdateSurface(3, 800, 600, 1.9);
+    await Flush();
+    var independent = new Window { Width = 420, Height = 300, MinWidth = 200 };
+    independent.Show();
+    var show = requests.Last(item => item.GetProperty("operation").GetString() == "show");
+    Check(independent.Owner is null && independent.DesktopScaling == 1.9 &&
+        !show.TryGetProperty("ownerId", out _) && show.GetProperty("independent").GetBoolean() &&
+        show.GetProperty("width").GetInt32() == 798 && show.GetProperty("height").GetInt32() == 570 &&
+        show.GetProperty("limits").GetProperty("minWidth").GetInt32() == 380,
+        "An independent window converts initial sizes and limits using the stage scale before attachment");
+
+    var independentId = show.GetProperty("id").GetInt32();
+    host.ReportChildFrame(independentId, 9, 1, new PixelRect(48, 32, 798, 570));
+    host.UpdateChildSurface(independentId, 4, 798, 510, 1.5);
+    host.ReportChildEvent(independentId, OpenHarmonyChildWindowEvent.Shown);
+    await Flush();
+    Check(independent.Owner is null && independent.DesktopScaling == 1.5 && independent.RenderScaling == 1.5 &&
+        independent.ClientSize == new Size(532, 340) && independent.FrameSize == new Size(532, 380),
+        "An independent window switches to its own native surface scale and geometry after attachment");
 }).WaitAsync(TimeSpan.FromSeconds(10));
 Check(errors.IsEmpty, string.Join(Environment.NewLine, errors));
 

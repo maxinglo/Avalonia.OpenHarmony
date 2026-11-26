@@ -79,11 +79,25 @@ class NativeWindow {
     this.focused = false;
     this.modal = !!options.isModal;
     this.decorated = options.decorEnabled;
+    this.status = statuses.FLOATING;
     this.limits = { minWidth: 240, minHeight: 180, maxWidth: 1200, maxHeight: 900 };
     this.avoidanceEnabled = false;
     this.destroyCalls = 0;
   }
   on(type, callback) { this.listeners.set(type, callback); }
+  getWindowStatus() { return this.status; }
+  async recover() { this.status = statuses.FLOATING; }
+  async maximize(value) {
+    assert.equal(this.options.maximizeSupported, true);
+    this.status = value === presentations.EXIT_IMMERSIVE ? statuses.MAXIMIZE : statuses.FULL_SCREEN;
+  }
+  async createSubWindowWithOptions(name, options) {
+    const child = await stage.createSubWindowWithOptions(name, options);
+    child.owner = this;
+    return child;
+  }
+  async setParentWindow(id) { this.reparentedTo = id; }
+  setWindowTitleButtonVisible(canMaximize, canMinimize) { this.captionButtons = [canMaximize, canMinimize]; }
   getWindowProperties() {
     const drawableRect = this.decorated
       ? { ...rect, width: 790, height: 560 } : rect;
@@ -143,11 +157,17 @@ const main = {
   desktop: false,
   status: statuses.FLOATING,
   decorated: true,
+  limits: { minWidth: 240, minHeight: 180, maxWidth: 1200, maxHeight: 900 },
   decorButtonStyle: { spacingBetweenButtons: 20 },
   titleButtonRect: { right: 0, top: 4, width: 140, height: 28 },
   moveCount: 0,
   listeners: new Map(),
-  getWindowProperties: () => ({ id: 70, windowRect: rect, drawableRect: { ...rect, width: 790, height: 560 } }),
+  getWindowProperties() {
+    const [width, height] = this.resize ?? [rect.width, rect.height];
+    const frame = { ...rect, width, height };
+    return { id: 70, windowRect: frame,
+      drawableRect: this.decorated ? { ...frame, width: width - 10, height: height - 40 } : frame };
+  },
   on(type, callback) { this.listeners.set(type, callback); },
   off(type, callback) { assert.equal(this.listeners.get(type), callback); this.listeners.delete(type); },
   isInFreeWindowMode() { return this.desktop; },
@@ -157,8 +177,18 @@ const main = {
     this.listeners.get('windowStatusDidChange')?.(status);
   },
   async resizeAsync(width, height) { this.resize = [width, height]; },
+  async moveWindowToGlobalDisplay(x, y) { this.globalPosition = [x, y]; },
+  async setWindowTitle(title) { this.title = title; },
+  async setWindowTopmost(value) {
+    if (this.denyTopmost) throw Object.assign(new Error('permission denied'), { code: 201 });
+    this.topmost = value;
+  },
+  getWindowLimits() { return this.limits; },
+  async setWindowLimits(limits) { this.limits = { ...limits }; return this.limits; },
   async setResizeByDragEnabled(enabled) { this.dragResize = enabled; },
-  setWindowTitleButtonVisible(canMaximize, canMinimize) { this.captionButtons = [canMaximize, canMinimize]; },
+  setWindowTitleButtonVisible(canMaximize, canMinimize, canClose) {
+    this.captionButtons = [canMaximize, canMinimize, canClose];
+  },
   getWindowDecorHeight() {
     assert.equal(this.decorated, true);
     return 37;
@@ -210,7 +240,7 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   assert.equal(await send(0, 'setResizable', false, { resizable: false }), '');
   assert.equal(main.dragResize, false);
   assert.equal(await send(0, 'setCaptionButtons', false, { canMaximize: false, canMinimize: true }), '');
-  assert.deepEqual(main.captionButtons, [false, true]);
+  assert.deepEqual(main.captionButtons, [false, true, true]);
   assert.equal(await setStageState('minimized'), '');
   assert.deepEqual(events.at(-1), [0, 10]);
   assert.equal(await setStageState('normal'), null);
@@ -225,6 +255,38 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   assert.deepEqual(events.at(-1), [0, 11]);
   main.reportStatus(statuses.FLOATING);
   assert.deepEqual(events.at(-1), [0, 9]);
+  assert.equal(await send(0, 'move', false, { x: -12, y: 88 }), '');
+  assert.deepEqual(main.globalPosition, [-12, 88]);
+  assert.equal(await send(0, 'setTitle', false, { title: 'Workbench' }), '');
+  assert.equal(main.title, 'Workbench');
+  assert.equal(await send(0, 'setTopmost', false, { topmost: true }), '');
+  assert.equal(main.topmost, true);
+  main.denyTopmost = true;
+  assert.equal(await send(0, 'setTopmost', false, { topmost: false }), null);
+  assert.equal(main.topmost, true);
+  main.denyTopmost = false;
+  assert.equal(await send(0, 'setTopmost', false, { topmost: false }), '');
+  assert.equal(main.topmost, false);
+  const stageLimits = { minWidth: 300, maxHeight: 500 };
+  assert.equal(await send(0, 'setLimits', false, { limits: stageLimits }), '');
+  assert.deepEqual(main.limits, { minWidth: 310, minHeight: 180, maxWidth: 1200, maxHeight: 540 });
+  assert.equal(await send(0, 'setDecorations', false, { limits: stageLimits }), '');
+  assert.equal(main.decorated, false);
+  assert.deepEqual(main.captionButtons, [false, false, false]);
+  assert.deepEqual(main.limits, { minWidth: 300, minHeight: 180, maxWidth: 1200, maxHeight: 500 });
+  assert.equal(await send(0, 'setDecorations', false, { decorated: true, limits: {} }), '');
+  assert.equal(main.decorated, true);
+  assert.deepEqual(main.captionButtons, [false, true, true]);
+  assert.deepEqual(main.limits, { minWidth: 240, minHeight: 180, maxWidth: 1200, maxHeight: 900 });
+  assert.equal(await send(0, 'resizeFromGrip', false,
+    { x: 800, y: 600, width: 500, height: 300, resizeFromLeft: true, resizeFromTop: true }), '');
+  assert.deepEqual(main.resize, [500, 300]);
+  assert.deepEqual(main.globalPosition, [300, 300]);
+  assert.equal(await send(0, 'hide'), '');
+  assert.deepEqual(events.at(-1), [0, 10]);
+  assert.equal(await send(0, 'show'), '');
+  assert.deepEqual(events.at(-1), [0, 9]);
+  calls.push('Stage move, title, decorations, size limits, topmost permission, grip anchoring, hide and restore');
 
   const extendTitleBar = (enabled, height = -1, theme) =>
     send(0, 'setExtendedTitleBar', false, { extendTitleBar: enabled, titleBarHeight: height, titleBarTheme: theme });
@@ -365,6 +427,38 @@ const has = (key, event) => events.some(item => item[0] === key && item[1] === e
   assert.equal(focusTransfers.length, 1);
   await send(10, 'close');
   calls.push('Stage activation only transfers focus from a known nonmodal window of this app');
+
+  assert.equal(await send(11, 'show', false, { independent: true }), null);
+  main.desktop = true;
+  main.listeners.get('freeWindowModeChange')(main.desktop);
+  assert.equal(await send(11, 'show', false, { independent: true, canMaximize: true, canMinimize: false }), '');
+  const independent = native.get('AvaloniaChild11');
+  assert.equal(independent.options.zLevelAboveParentLoosened, true);
+  assert.equal(independent.options.maximizeSupported, true);
+  assert.deepEqual(independent.captionButtons, [true, false]);
+  assert.equal(await send(11, 'setCaptionButtons', false, { canMaximize: false, canMinimize: true }), '');
+  assert.deepEqual(independent.captionButtons, [false, true]);
+  assert.equal(await send(11, 'setState', false, { state: 'maximized' }), '');
+  assert.deepEqual(events.at(-1), [11, 11]);
+  assert.equal(await send(11, 'setState', false, { state: 'minimized' }), '');
+  assert.equal(independent.visible, false);
+  assert.deepEqual(events.at(-1), [11, 10]);
+  assert.equal(await send(11, 'setState', false, { state: 'normal' }), '');
+  assert.equal(independent.visible, true);
+  assert.deepEqual(events.at(-1), [11, 9]);
+  assert.equal(await send(12, 'show', false, { ownerId: 99 }), null);
+  assert.equal(await send(12, 'show', true, { ownerId: 11 }), '');
+  const nested = native.get('AvaloniaChild12');
+  assert.equal(nested.owner, independent);
+  assert.equal(nested.modal, true);
+  assert.equal(await send(12, 'setState', false, { state: 'minimized' }), null);
+  assert.equal(await send(12, 'hide'), '');
+  assert.equal(await send(12, 'show', false, { ownerId: 0 }), '');
+  assert.equal(nested.reparentedTo, 70);
+  assert.equal(nested.modal, false);
+  await send(12, 'close');
+  await send(11, 'close');
+  calls.push('Independent and nested windows keep native ownership, caption policy, state and modality');
 
   let finish;
   suspendCreate = new Promise(resolve => { finish = resolve; });

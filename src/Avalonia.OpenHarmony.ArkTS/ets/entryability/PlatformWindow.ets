@@ -1,4 +1,4 @@
-import { Configuration, ConfigurationConstant } from '@kit.AbilityKit';
+import { common, Configuration, ConfigurationConstant } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import bridge from 'libavalonia_ohos_bridge.so';
@@ -13,11 +13,19 @@ export enum HostLifecycle {
   ApplicationForeground = 5
 }
 
-export function updateTheme(config: Configuration): void {
+export function updateTheme(config: Configuration, context?: common.UIAbilityContext): void {
   if (config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK) {
     bridge.setTheme(true);
   } else if (config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT) {
     bridge.setTheme(false);
+  }
+  if (context === undefined) {
+    return;
+  }
+  try {
+    bridge.setAccent(context.resourceManager.getColorSync($r('sys.color.ohos_id_color_emphasize').id));
+  } catch (error) {
+    hilog.warn(0x0202, 'AvaloniaOHOS', 'System emphasis color unavailable: %{public}s', (error as Error).message);
   }
 }
 

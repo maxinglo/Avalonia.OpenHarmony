@@ -5,7 +5,8 @@ device coordinates in physical pixels. The backend divides them by the surface s
 five buttons, hover exit, horizontal and vertical scrolling, and focus loss follow Avalonia's normal event path.
 
 Hardware key down and up events carry the ArkUI code and the Alt, Ctrl, Shift, and Meta states. The backend translates
-regular editing, navigation, and function keys, including the numeric keypad. It emits basic Latin text from the SDK's
+editing, navigation, F1–F24, numeric keypad, media transport and volume keys when the OS forwards them. It emits
+basic Latin text from the SDK's
 `KeyEvent.unicode` after an unhandled key down. ArkUI calls `onKeyEvent` after giving the input method a chance to
 consume
 the key. Layout composition and other text rely on the system input method. The keyboard event guide describes the
@@ -22,6 +23,21 @@ at a native region boundary. Mouse input refreshes the cursor selected by Avalon
 Wheel input preserves the system sensitivity, with one Avalonia wheel unit per 15 degrees of rotation. Touchpad
 scroll distance uses 48 vp per wheel unit.
 [ArkUI mouse events](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/arkts-interaction-development-guide-mouse/)
+
+## Pen and touch
+
+The host forwards finger events with keyboard modifiers. When ArkUI reports `SourceTool.Pen`, the event uses
+Avalonia's pen device with tip press, move, release, hover, pressure and X/Y tilt. The contact is cleared on
+release, cancellation or input loss. The ArkUI callbacks used here supply tip and hover data. Barrel buttons,
+an eraser tool and pen twist need a device and input path that report those properties.
+[ArkUI touch and stylus input](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/arkts-interaction-development-guide-touch-screen/)
+· [ArkUI hover input](https://developer.huawei.com/consumer/en/doc/harmonyos-references/ts-universal-events-hover/)
+
+The PC Counter received mouse and touch and reported F13 as both the logical and physical key.
+Its emulator's `uinput -S` delivered ordinary touch events, consistent with the public injection tool's
+documented behavior. The managed Counter probe checks that pen type, pressure, tilt and Shift survive Avalonia
+hit testing. Device verification of the stylus route requires pen input that preserves the tool type.
+[OpenHarmony input injection](https://github.com/openharmony/docs/blob/master/zh-cn/application-dev/dfx/uinput.md)
 
 ## Application exports
 

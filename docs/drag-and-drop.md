@@ -10,18 +10,19 @@ The host routes each callback by its physical XComponent token. Closing, hiding,
 drag into a different window releases the prior drag target. An owned modal window receives drops while its owner
 is disabled.
 
-The XComponent advertises plain text and file records. Enter and move events expose the formats in the OS summary.
-Text and files become available during Drop. The host transforms ArkUI window coordinates to the XComponent's
-physical coordinates before Avalonia hit testing. Drag-over and drop effects use Copy, and the OS receives the target's
-decision inside the ArkUI callback. Run asynchronous work after the handler's synchronous decision. A callback that
-waits for ArkUI while ArkUI waits for the dispatcher would block both threads.
+The XComponent advertises plain text, HTML, web links and files. Enter and move events expose the formats in the
+OS summary, and Drop materializes them. The host transforms ArkUI window coordinates to physical coordinates
+relative to the XComponent before Avalonia hit testing. Copy is the default. A non-file offer can use Move when
+Shift is held and the Avalonia handler accepts Move. The system receives the target's decision in the ArkUI
+callback, so asynchronous work belongs after that decision.
 
-The receiver accepts UDMF plain text and readable regular files represented by `general.file-uri` or
-`general.file` records. The file path must be a `file://` URI. FileKit checks system authorization on Drop and opens
-the file with read-only and nonblocking flags while the grant is active. The managed file retains a duplicate descriptor so it remains readable
-after the source's temporary grant ends. The target should dispose each `IStorageFile` it keeps. The retained object
-provides read-only streams without requesting a persistent grant. The bridge limits one drop to 32 transferred items
-and a 1 MiB UTF-8 payload, including metadata and text. [ArkUI drag and drop](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/arkts-common-events-drag-event/) · [UDMF authorization](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-data-unifieddatachannel/)
+The file path must be a `file://` URI for a regular file. FileKit checks the temporary system grant on Drop.
+An explicit WRITE policy and a successful read-write open are both required to expose a writable stream.
+Otherwise the receiver opens the file read-only, if authorized. It retains a duplicate descriptor across the
+callback. Dispose each retained `IStorageFile` when finished. The bridge limits a drop to 32 items and a 1 MiB
+UTF-8 payload.
+[ArkUI drag and drop](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/arkts-common-events-drag-event/)
+· [UDMF authorization](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-data-unifieddatachannel/)
 
 ## NativeAOT export
 
@@ -31,10 +32,10 @@ int32_t avaoh_drag(int64_t surface, int32_t phase, double xPx, double yPx,
 ```
 
 Phases from 0 through 3 are enter, over, leave, and drop. Modifier bits match Avalonia's
-`RawInputModifiers.KeyboardMask`. Enter and over use a bit mask of 1 for text and 2 for files, with an empty UTF-8
-payload. Drop passes JSON with `texts` and `files` arrays. Each file entry contains its `uri`, borrowed
-`descriptor` and `length`. A result of 1 indicates Copy. The receiver must retain any descriptor it will keep before
-returning. The ArkTS host closes each descriptor it opened after the native call returns.
+`RawInputModifiers.KeyboardMask`. V1 hosts receive UTF-8 JSON with `texts` and `files`. Hosts that
+forward the extended pointer export receive ordered `items` with richer data and file grants. Counter's
+export calls `OpenHarmonyHost.ReceiveDragEffect` and returns the selected Avalonia effect. The ArkTS host
+closes its borrowed descriptors after the native call returns.
 
 ## Verification
 
@@ -44,11 +45,11 @@ cross-window leave, stale token rejection after surface replacement, and modalit
 The API 26 native bridge compiled for x86_64 and arm64-v8a. The x86_64 Counter includes the real NativeAOT export
 and ArkTS receiver.
 
-In split screen, drag Unicode text or a readable file from another application onto **Drop text or files here**.
-Counter writes the text length or bytes read to hilog. The launch logs include the current physical drop target
-coordinates. The windowed Counter also exposes a separate drop target in each owned window.
+On PC, an independent ArkUI test app and Counter exchanged data using the mouse. Counter received text,
+HTML and a web link. It read a READ-only file fixture and wrote a second fixture when the source granted
+WRITE. The source observed the marker in the writable sample only. The independent test page is
+`tests/TextDragSourceProbe/HarmonyDragPeer.ets`.
 
 ## Starting a drag
 
-The touch drag source sends plain text to the system with a Copy effect. Its opt-in is independent of receiving
-drops. [Starting a system text drag](text-drag-source.md)
+The source opt-in is independent of receiving drops. [Starting a system drag](text-drag-source.md)

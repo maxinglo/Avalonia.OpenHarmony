@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.OpenHarmony;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -39,7 +41,7 @@ public static partial class Program
         CounterApp.Trace = Report;
         var host = new OpenHarmonyHost(ConfigureApp, Present, Report, GetInputWindowId, _initialTheme,
             new OpenHarmonyLauncher(OpenHarmonySystemRequests.RequestAsync),
-            new OpenHarmonyStorageProvider(OpenHarmonySystemRequests.RequestAsync, CanPickFolders() != 0));
+            new OpenHarmonyStorageProvider(OpenHarmonySystemRequests.RequestAsync, CanPickFolders() != 0), _initialAccent);
         host.UseInsetsCommands(OpenHarmonySystemRequests.RequestAsync);
         return host;
     });
@@ -62,12 +64,28 @@ public static partial class Program
             Host.Value.Touch(surface, contact, (TouchPhase)phase, x, y);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_touch_with_details")]
+    public static void TouchWithDetails(long surface, long contact, int phase, double x, double y, int pen,
+        int modifiers, double pressure, double tiltX, double tiltY)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.Touch(surface, contact, (TouchPhase)phase, x, y, pen != 0, modifiers, pressure, tiltX, tiltY);
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "avaoh_pointer")]
     public static void Pointer(long surface, int phase, int button, double x, double y, double wheelX, double wheelY,
         int modifiers)
     {
         if (Host.IsValueCreated)
             Host.Value.HardwarePointer(surface, phase, button, x, y, wheelX, wheelY, modifiers);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_pointer_with_gesture")]
+    public static void PointerWithGesture(long surface, int phase, int button, double x, double y, double wheelX,
+        double wheelY, int modifiers, long dragGesture)
+    {
+        if (Host.IsValueCreated)
+            Host.Value.HardwarePointer(surface, phase, button, x, y, wheelX, wheelY, modifiers, dragGesture);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "avaoh_key")]
@@ -88,7 +106,7 @@ public static partial class Program
         if (!Host.IsValueCreated || length is < 0 or > 1_048_576 || (length != 0 && payload == null))
             return 0;
         var data = System.Text.Encoding.UTF8.GetString(new ReadOnlySpan<byte>(payload, length));
-        return Host.Value.ReceiveDrag(surface, phase, x, y, modifiers, formats, data) ? 1 : 0;
+        return (int)Host.Value.ReceiveDragEffect(surface, phase, x, y, modifiers, formats, data);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "avaoh_accessibility_configure")]
@@ -161,6 +179,21 @@ public static partial class Program
         host.Touch(1, 0, TouchPhase.End, 60, 85);
         if (!await clicked.Task.WaitAsync(TimeSpan.FromSeconds(10)))
             throw new InvalidOperationException("Touch did not activate the Avalonia button.");
+        var penPressed = new TaskCompletionSource<PointerPointProperties>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            TopLevel.GetTopLevel(CounterApp.PopupSelector)!.AddHandler(InputElement.PointerPressedEvent, (_, args) =>
+            {
+                if (args.Pointer.Type == PointerType.Pen && args.KeyModifiers == KeyModifiers.Shift)
+                    penPressed.TrySetResult(args.GetCurrentPoint(null).Properties);
+            }, RoutingStrategies.Tunnel, handledEventsToo: true);
+        });
+        host.Touch(1, 7, TouchPhase.Begin, 60, 85, true, (int)RawInputModifiers.Shift, 0.42, -17, 29);
+        host.Touch(1, 7, TouchPhase.End, 60, 85, true, (int)RawInputModifiers.Shift, 0, -17, 29);
+        var tip = await penPressed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (tip.Pressure != 0.42f || tip.XTilt != -17 || tip.YTilt != 29)
+            throw new InvalidOperationException("The pen did not retain pressure or tilt through Avalonia hit testing.");
+        Console.WriteLine("Avalonia recognized the pen and retained pressure, tilt and the Shift modifier.");
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             var comboBox = CounterApp.PopupSelector

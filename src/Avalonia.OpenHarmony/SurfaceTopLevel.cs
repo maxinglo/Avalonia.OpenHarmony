@@ -27,7 +27,8 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     private readonly OpenHarmonyCursorController? _cursorController;
     private readonly OpenHarmonyScreens _screens;
     private readonly OpenHarmonyNavigationManager _navigation = new();
-    private readonly OpenHarmonyEgl.Window? _eglWindow;
+    private readonly IPlatformRenderSurface[] _softwareSurfaces;
+    private OpenHarmonyEgl.Window? _eglWindow;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private IInputRoot? _inputRoot;
     private PixelSize _pixelSize;
@@ -50,19 +51,20 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         _launcher = launcher;
         _storageProvider = storageProvider;
         _screens = screens;
-        _eglWindow = eglWindow;
+        _softwareSurfaces = [this];
+        Surfaces = _softwareSurfaces;
+        SetEglWindow(eglWindow);
         if (getInputWindowId is not null)
         {
             _textInput = new(this, getInputWindowId, reportError);
             _cursorController = new(getInputWindowId, _hardwareDiagnostics);
         }
-        Surfaces = eglWindow is null ? [this] : [eglWindow];
     }
 
     public long Surface { get; }
     internal TopLevel? ControlRoot => _inputRoot?.FocusRoot as TopLevel;
     public Compositor Compositor { get; }
-    public IPlatformRenderSurface[] Surfaces { get; }
+    public IPlatformRenderSurface[] Surfaces { get; private set; }
     public bool UsesEgl => _eglWindow is not null;
     public PixelSize PixelSize => _pixelSize;
     public Size ClientSize => new(_pixelSize.Width / RenderScaling, _pixelSize.Height / RenderScaling);
@@ -89,14 +91,14 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         if ((long)width * height > MaximumPixels || !double.IsFinite(scaling) || scaling <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), "Invalid framebuffer geometry.");
         var size = new PixelSize(width, height);
-        if (_pixelSize == size && RenderScaling == scaling)
-            return;
-        if (_pixelSize != size && _eglWindow is null)
+        if (_eglWindow is null && (_pixels == IntPtr.Zero || _pixelSize != size))
         {
             var newBuffer = (IntPtr)NativeMemory.AllocZeroed(checked((nuint)width * (nuint)height * 4));
             NativeMemory.Free((void*)_pixels);
             _pixels = newBuffer;
         }
+        if (_pixelSize == size && RenderScaling == scaling)
+            return;
         _pixelSize = size;
         _eglWindow?.Resize(size, scaling);
         if (RenderScaling != scaling)
@@ -110,19 +112,46 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         _cursorController?.Invalidate();
     }
 
-    public IFramebufferRenderTarget CreateFramebufferRenderTarget() =>
-        new FuncFramebufferRenderTarget(
-            () =>
-            {
-                var size = _pixelSize;
-                var pixels = _pixels;
-                var stride = checked(size.Width * 4);
-                return new LockedFramebuffer(pixels, size, stride, new Vector(96 * RenderScaling, 96 * RenderScaling),
-                    PixelFormat.Rgba8888, AlphaFormat.Premul,
-                    () => _present(Surface, pixels, size.Width, size.Height, stride));
-            });
+    internal void SetEglWindow(OpenHarmonyEgl.Window? window)
+    {
+        _eglWindow?.Dispose();
+        _eglWindow = window;
+        Surfaces = window is null ? _softwareSurfaces : [window];
+        if (window is not null)
+        {
+            NativeMemory.Free((void*)_pixels);
+            _pixels = IntPtr.Zero;
+        }
+    }
 
-    public void Touch(long contact, TouchPhase phase, double x, double y)
+    public IFramebufferRenderTarget CreateFramebufferRenderTarget() => new FramebufferRenderTarget(this, null);
+
+    internal IFramebufferRenderTarget CreateFramebufferRenderTarget(Func<bool> canRender) =>
+        new FramebufferRenderTarget(this, canRender);
+
+    private sealed class FramebufferRenderTarget(SurfaceTopLevel owner, Func<bool>? canRender) : IFramebufferRenderTarget
+    {
+        public PlatformRenderTargetState State => owner._disposed || owner.UsesEgl
+            ? PlatformRenderTargetState.Corrupted
+            : canRender?.Invoke() == false ? PlatformRenderTargetState.NotReadyWillWakeupRenderLoop
+            : PlatformRenderTargetState.Ready;
+
+        public ILockedFramebuffer Lock(IRenderTarget.RenderTargetSceneInfo sceneInfo, out FramebufferLockProperties properties)
+        {
+            properties = default;
+            var size = owner._pixelSize;
+            var pixels = owner._pixels;
+            var stride = checked(size.Width * 4);
+            var dpi = 96 * owner.RenderScaling;
+            return new LockedFramebuffer(pixels, size, stride, new Vector(dpi, dpi), PixelFormat.Rgba8888, AlphaFormat.Premul,
+                () => owner._present(owner.Surface, pixels, size.Width, size.Height, stride));
+        }
+
+        public void Dispose() { }
+    }
+
+    public void Touch(long contact, TouchPhase phase, double x, double y,
+        RawInputModifiers modifiers = RawInputModifiers.None)
     {
         if (_inputRoot == null || !double.IsFinite(x) || !double.IsFinite(y))
             return;
@@ -134,14 +163,19 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
             _ => RawPointerEventType.TouchCancel
         };
         var raw = new RawTouchEventArgs(_touch, (ulong)_clock.ElapsedMilliseconds, _inputRoot, kind,
-            new Point(x / RenderScaling, y / RenderScaling), RawInputModifiers.None, contact);
+            new Point(x / RenderScaling, y / RenderScaling), modifiers & RawInputModifiers.KeyboardMask, contact);
         if (phase == TouchPhase.Begin && contact < 0)
             raw.PlatformInputEventCookie = new OpenHarmonyTextDragGesture(contact);
         Input?.Invoke(raw);
     }
 
     public void SetInputRoot(IInputRoot inputRoot) => _inputRoot = inputRoot;
-    internal void SetInputMethodActive(bool active) => _textInput?.SetInputMethodActive(active);
+    internal void SetInputMethodActive(bool active)
+    {
+        if (!active)
+            CancelPenInput();
+        _textInput?.SetInputMethodActive(active);
+    }
     internal bool RequestBack() => _navigation.RequestBack();
 
     internal void InsertText(string text)
@@ -163,7 +197,9 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
     public Point PointToClient(PixelPoint point) => (point - ScreenOrigin).ToPoint(RenderScaling);
     public PixelPoint PointToScreen(Point point) => PixelPoint.FromPoint(point, RenderScaling) + ScreenOrigin;
     public void SetCursor(ICursorImpl? cursor) => _cursorController?.SetCursor(cursor);
+    // Avalonia hosts popups in its overlay when the platform has no native popup surface.
     public IPopupImpl? CreatePopup() => null;
+    // The app background API does not control the freeform window container.
     public void SetTransparencyLevelHint(IReadOnlyList<WindowTransparencyLevel> levels) { }
     public void SetFrameThemeVariant(PlatformThemeVariant? themeVariant) { }
     public object? TryGetFeature(Type featureType)
@@ -221,6 +257,7 @@ internal sealed unsafe partial class SurfaceTopLevel : ITopLevelImpl, IFramebuff
         _pixels = IntPtr.Zero;
         _touch.Dispose();
         _mouse.Dispose();
+        _pen.Dispose();
         Closed?.Invoke();
     }
 }

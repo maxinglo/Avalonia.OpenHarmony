@@ -35,9 +35,30 @@ public sealed partial class CounterApp
                 Trace($"Stage native handle {handle.HandleDescriptor}: {handle.Handle}");
             MakeChild("Constrained child", false, constrained: true).Show(owner);
         };
+        var independent = new Button { Content = "Open independent window" };
+        Window? independentWindow = null;
+        independent.Click += (_, _) =>
+        {
+            if (independentWindow is { } existing)
+            {
+                existing.WindowState = WindowState.Normal;
+                existing.Activate();
+                return;
+            }
+            var child = MakeChild("Independent window", false, independent: true);
+            independentWindow = child;
+            child.Closed += (_, _) =>
+            {
+                independentWindow = null;
+                independent.Content = "Open independent window";
+            };
+            child.Show();
+            independent.Content = "Restore independent window";
+        };
         var (stageButtons, stageTargets) = StageWindowButtons();
-        return (new StackPanel { Spacing = 8, Children = { stageButtons, new WrapPanel { Children = { open, dialog, policies } } } },
-            [.. stageTargets, ("Open owned window", open), ("Open modal dialog", dialog), ("Open constrained window", policies)]);
+        return (new StackPanel { Spacing = 8, Children = { stageButtons, new WrapPanel { Children = { open, dialog, policies, independent } } } },
+            [.. stageTargets, ("Open owned window", open), ("Open modal dialog", dialog), ("Open constrained window", policies),
+                ("Open or restore independent window", independent)]);
     }
 
     private static (Control Buttons, (string Name, Control Element)[] Targets) StageWindowButtons()
@@ -54,6 +75,37 @@ public sealed partial class CounterApp
             Trace($"Stage resize requested: width {width}");
             window.Width = width;
         });
+        Add("Stage move", window =>
+        {
+            var position = window.Position + new PixelPoint(48, 32);
+            Trace($"Stage move requested: {position}");
+            window.Position = position;
+        });
+        Add("Stage title", window =>
+        {
+            window.Title = window.Title == "Counter workbench" ? "Avalonia Counter" : "Counter workbench";
+            Trace($"Stage title requested: {window.Title}");
+        });
+        Add("Stage decorations", window =>
+        {
+            window.WindowDecorations = window.WindowDecorations == WindowDecorations.None
+                ? WindowDecorations.Full : WindowDecorations.None;
+            Trace($"Stage decorations requested: {window.WindowDecorations}");
+        });
+        Add("Stage size limits", window =>
+        {
+            var enable = double.IsPositiveInfinity(window.MaxWidth);
+            window.MinWidth = enable ? 480 : 0;
+            window.MinHeight = enable ? 360 : 0;
+            window.MaxWidth = enable ? 760 : double.PositiveInfinity;
+            window.MaxHeight = enable ? 620 : double.PositiveInfinity;
+            Trace($"Stage size limits requested: {window.MinWidth} x {window.MinHeight} to {window.MaxWidth} x {window.MaxHeight}");
+        });
+        Add("Stage topmost", window =>
+        {
+            window.Topmost = !window.Topmost;
+            Trace($"Stage topmost requested: {window.Topmost}");
+        });
         Add("Stage caption policy", window =>
         {
             window.CanMinimize = !window.CanMinimize;
@@ -65,6 +117,23 @@ public sealed partial class CounterApp
             window.ExtendClientAreaTitleBarHeightHint = 44;
             window.ExtendClientAreaToDecorationsHint = !window.ExtendClientAreaToDecorationsHint;
         });
+        var grip = new Border
+        {
+            Background = Brushes.Transparent,
+            Padding = new Thickness(8),
+            Child = new TextBlock { Text = "Drag to resize stage" }
+        };
+        grip.PointerPressed += (_, args) =>
+        {
+            if (TopLevel.GetTopLevel(grip) is Window window)
+            {
+                window.BeginResizeDrag(WindowEdge.SouthEast, args);
+                Trace("Stage southeast resize grip pressed");
+                args.Handled = true;
+            }
+        };
+        panel.Children.Add(grip);
+        targets.Add(("Drag to resize stage", grip));
 
         Window? owner = null;
         WindowState? lastState = null;
@@ -200,7 +269,7 @@ public sealed partial class CounterApp
         }
     }
 
-    private static Window MakeChild(string title, bool modal, bool constrained = false)
+    private static Window MakeChild(string title, bool modal, bool constrained = false, bool independent = false)
     {
         var window = new Window
         {
@@ -241,6 +310,46 @@ public sealed partial class CounterApp
 #if OHOS
         targets.Add(("Child drag source", dragSource));
 #endif
+        if (!modal)
+        {
+            var nested = new Button { Content = "Open nested window" };
+            nested.Click += (_, _) => MakeChild("Nested child", false).Show(window);
+            var nestedDialog = new Button { Content = "Open nested dialog" };
+            nestedDialog.Click += async (_, _) =>
+            {
+                var result = await MakeChild("Nested dialog", true).ShowDialog<int>(window);
+                Trace($"Nested dialog result: {result}");
+            };
+            controls.Children.Add(nested);
+            controls.Children.Add(nestedDialog);
+            targets.Add(("Open nested window", nested));
+            targets.Add(("Open nested dialog", nestedDialog));
+        }
+        if (independent)
+        {
+            AddStateButton("Child minimize", WindowState.Minimized);
+            AddStateButton("Child maximize", WindowState.Maximized);
+            AddStateButton("Child normal", WindowState.Normal);
+            AddStateButton("Child fullscreen", WindowState.FullScreen);
+            var captions = new Button { Content = "Child caption policy" };
+            captions.Click += (_, _) =>
+            {
+                window.CanMinimize = !window.CanMinimize;
+                window.CanMaximize = window.CanMinimize;
+                Trace($"Child caption policy requested: minimize {window.CanMinimize}, maximize {window.CanMaximize}");
+            };
+            controls.Children.Add(captions);
+            targets.Add(("Child caption policy", captions));
+            var lastState = window.WindowState;
+            window.PropertyChanged += (_, args) =>
+            {
+                if (args.Property == Window.WindowStateProperty && lastState != window.WindowState)
+                {
+                    lastState = window.WindowState;
+                    Trace($"Independent child state changed: {lastState}");
+                }
+            };
+        }
         if (constrained)
         {
             window.MinWidth = 360;
@@ -308,10 +417,22 @@ public sealed partial class CounterApp
         };
         window.Content = content;
         ObserveTopLevel(content, targets.ToArray());
-        window.Opened += (_, _) => Trace("Avalonia child opened");
+        window.Opened += (_, _) => Trace($"Avalonia child opened: {title}");
         window.PositionChanged += (_, e) => Trace($"Avalonia child position: {e.Point}");
         window.Resized += (_, e) => Trace($"Avalonia child size: {e.ClientSize}");
         window.Closed += (_, _) => Trace("Avalonia child closed");
         return window;
+
+        void AddStateButton(string name, WindowState state)
+        {
+            var button = new Button { Content = name };
+            button.Click += (_, _) =>
+            {
+                Trace($"Independent child state requested: {state}");
+                window.WindowState = state;
+            };
+            controls.Children.Add(button);
+            targets.Add((name, button));
+        }
     }
 }

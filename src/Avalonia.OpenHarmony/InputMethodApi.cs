@@ -32,7 +32,7 @@ internal static unsafe partial class InputMethodApi
     }
 
     internal enum CursorDirection { Up = 1, Down = 2, Left = 3, Right = 4 }
-    internal enum ExtendAction { SelectAll = 0 }
+    internal enum ExtendAction { SelectAll = 0, Cut = 3, Copy = 4, Paste = 5 }
 
     internal const int UnsupportedEditorOperation = 12800003;
 
@@ -63,8 +63,10 @@ internal static unsafe partial class InputMethodApi
     [LibraryImport(Library)] public static partial int OH_TextConfig_SetEnterKeyType(nint config, EnterKey type);
     [LibraryImport(Library)] public static partial int OH_TextConfig_SetSelection(nint config, int start, int end);
     [LibraryImport(Library)] public static partial int OH_TextConfig_SetPreviewTextSupport(nint config, byte supported);
+    [LibraryImport(Library)] public static partial int OH_TextConfig_SetPlaceholder(nint config, char* placeholder, nuint length);
     [LibraryImport(Library)] public static partial int OH_InputMethodProxy_ShowKeyboard(nint proxy);
     [LibraryImport(Library)] public static partial int OH_InputMethodProxy_NotifySelectionChange(nint proxy, char* text, nuint length, int start, int end);
+    [LibraryImport(Library)] public static partial int OH_InputMethodProxy_NotifyConfigurationChange(nint proxy, EnterKey enterKey, EditorType inputType);
     [LibraryImport(Library)] public static partial nint OH_CursorInfo_Create(double left, double top, double width, double height);
     [LibraryImport(Library)] public static partial void OH_CursorInfo_Destroy(nint cursor);
     [LibraryImport(Library)] public static partial int OH_InputMethodProxy_NotifyCursorUpdate(nint proxy, nint cursor);

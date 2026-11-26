@@ -57,6 +57,9 @@ Dragging the header moved the window by 174 × 112 px. Native maximize and resto
 preserved the extended title, and Dock restore after native minimization returned
 to the same floating frame and window ID. The native close button removed the window.
 
+The AudioSynx Arc HAP installed under its regular bundle ID repeated the extended frame,
+174 × 112 px title drag, native window actions and light/dark caption contrast checks.
+
 After restoring the stage, the original modal flow still blocked the owner, returned 1 and let the owner advance
 to count 3 after closing. The embedded EGL variant received NativeVSync, presented a 2090 × 1213 frame and
 accepted clicks in both the Avalonia and ArkUI counters. The Windows smoke and managed lifecycle, child insets,
@@ -91,6 +94,18 @@ The [text drag probe](text-drag-source.md#verification) checks ordered records a
 results cover the active display only. Native multi-monitor hot-plug and cross-application delivery of several text records
 require their own device checks.
 
+### API 26 PC service checks
+
+| Capability | Device result | Additional coverage |
+| --- | --- | --- |
+| Stage and auxiliary windows | Programmatic move and title changes reached WindowManager. The topmost stage stayed above the independent app after that app received focus. Disabling topmost let the independent app move above it. The custom resize grip moved the stage edge by 155 × 75 px. A nested native modal returned `1`. An independent 420 × 300 DIP window opened at 798 × 570 px, maximized to 3120 × 1955 px, restored its starting frame, minimized, and reopened with the same window ID. | Managed probes exercised retained limits, window routing, and per-surface EGL fallback. |
+| Native tray menu image | The native menu displayed the purple bitmap with a white plus next to **Add one from tray**. Clicking the native menu item dispatched the Avalonia command. | The tray probe covers changes to icons and menu entries. |
+| Pointer and appearance | Real PC input delivered F13 with the same logical and physical key. Avalonia read the system emphasis color. The emulator's stylus injection arrived as ordinary touch. | Managed pointer routing checked stylus type, pressure, X/Y tilt and modifiers. Real stylus, hover and multiple attached displays need hardware. |
+| Rich clipboard | The secure PasteButton returned two ordered items containing text, HTML, a bitmap and application data. The check included exact alpha, binary bytes and an empty value. Clearing the pasteboard yielded an empty result. | The Windows ABI probe checked denied paste and pixel buffer lifetime. |
+| File picker and launch requests | Counter saved and reopened a 24-byte sample using the plain-text MIME filter. The system exposed modification time and the save filter index. Direct known-folder lookup had no grant. An unregistered URI returned unavailable, and the PC image showed no handler for the tested mail link. | Storage and launcher probes check cancellation, directory grants, and the shape of file and folder launch requests. |
+| Text editor | The Counter editor attached to the PC window, advertised inline preview through the native API and accepted a hardware key. | A Windows ABI probe checked preedit callbacks, native editing commands and password guards in an Avalonia TextBox. |
+| Cross-application drag | Counter Avalonia buttons sent four plain and two rich offers to a separate ArkUI app in a mouse test. Four offers reached ArkUI after native drag detection and still completed as Copy. A plain-text preview measured 292 × 79 px and the generic card measured 121 × 79 px. Injected touch also delivered text with a compact preview. Drag-only buttons did not raise Click, and dragging an ordinary button produced no drop. Inbound, FileKit denied writing to the READ-only fixture and the sender observed the marker after a WRITE-enabled drop. | Move has automated coverage. Outbound files are rejected because the PC receiver could open a test file for writing even with an explicit READ policy. [Outbound file scope](text-drag-source.md#outbound-file-scope) |
+
 ## Huawei_TripleFold checks
 
 The Counter sample logs under `AvaloniaOHOS`. Its text field logs only lengths and decreases. It reports a fixed
@@ -118,9 +133,8 @@ logs with `OpenHarmonyInputDiagnostics`.
 | Accessibility | HarmonyOS ScreenReader activated the opt-in Counter main button in the API 26 x86_64 production bridge build. After moving and focusing a native child window, a single touch focused its counter and a double touch on a blank area invoked that button exactly once. The same run independently incremented the main counter. Windows checked Arc names, roles, bounds and states, including rejection of stale owner actions during modality. The Windows scroll probe exercised forward and backward paging, horizontal fallback, scaled pixel offsets, and rejection of stale and blocked modal actions. The native scroll bridge linked for both API 26 ABIs. | Enable the sample accessibility option and system ScreenReader. Focus Add one and use the system activation gesture. In the windowed Counter, move an owned window and repeat on its counter. For system scroll validation, constrain the Counter so its content overflows and check that paging moves content and stops at each edge. |
 | Owned windows and modal dialogs | The opt-in x86_64 native Counter presented a separate Avalonia dialog frame, rejected owner touch while modal, accepted child touch, returned 1 from ShowDialog, and restored owner input after close. The modeless window moved, resized from about 420 to 500 DIP wide, and closed. In the integrated HAP, IME attachment and WindowManager focus both identified the child window. The final close-fix HAP repeated both normal open and close flows. Rejected native closure and retries were verified with fault injection. | Run the `-Windowed` sample and test **Open modal dialog** and **Open owned window**. [Owned window integration](owned-windows.md) |
 
-The default embedded host and AudioSynx use one application view with Avalonia menus and dropdowns. A separate EGL
-rotation check and independent native windows require further platform verification. The outbound system source
-accepts plain text and rejects file offers. [Outbound file scope](text-drag-source.md#outbound-file-scope)
+The default embedded host uses one application view with Avalonia menus and dropdowns. A separate EGL rotation
+check remains open. The current PC drag source also supports HTML and web links. [Outbound file scope](text-drag-source.md#outbound-file-scope)
 
 ## ScreenReader scroll check
 

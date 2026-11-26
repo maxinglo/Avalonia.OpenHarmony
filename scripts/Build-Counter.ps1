@@ -33,8 +33,8 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $runtimeCommit) {
 }
 
 $rid, $machine = if ($Abi -eq 'x86_64') { 'linux-musl-x64', 'X86-64' } else { 'linux-musl-arm64', 'AArch64' }
-if ($UseEgl -and $Windowed) { throw 'The windowed Counter currently uses software rendering.' }
-$renderingSuffix = if ($UseEgl) { '/egl' } elseif ($Windowed) { '/windowed' } else { '' }
+$renderingSuffix = if ($Windowed -and $UseEgl) { '/windowed/egl' }
+    elseif ($Windowed) { '/windowed' } elseif ($UseEgl) { '/egl' } else { '' }
 $diagnosticsSuffix = if ($TraceImePreview) { '/ime-preview' } else { '' }
 $useEglValue = $UseEgl.IsPresent.ToString().ToLowerInvariant()
 $traceImeValue = $TraceImePreview.IsPresent.ToString().ToLowerInvariant()
@@ -72,9 +72,9 @@ if ($LASTEXITCODE -ne 0 -or $symbols -notmatch "Machine:.*$machine") {
     throw "The managed application must be $Abi ELF."
 }
 $counterExports = @(
-    'avaoh_resize', 'avaoh_destroy', 'avaoh_touch',
-    'avaoh_key', 'avaoh_pointer', 'avaoh_input_blur', 'avaoh_paste', 'avaoh_drag',
-    'avaoh_set_lifecycle', 'avaoh_set_theme', 'avaoh_set_displays', 'avaoh_set_window_position',
+    'avaoh_resize', 'avaoh_destroy', 'avaoh_touch', 'avaoh_touch_with_details',
+    'avaoh_key', 'avaoh_pointer', 'avaoh_pointer_with_gesture', 'avaoh_input_blur', 'avaoh_paste', 'avaoh_drag',
+    'avaoh_set_lifecycle', 'avaoh_set_theme', 'avaoh_set_accent', 'avaoh_set_displays', 'avaoh_set_window_position',
     'avaoh_set_surface_offset', 'avaoh_request_back',
     'avaoh_set_avoid_area', 'avaoh_set_child_avoid_area', 'avaoh_set_window_inset_properties', 'avaoh_clear_window_insets',
     'avaoh_accessibility_configure', 'avaoh_accessibility_invoke', 'avaoh_accessibility_action',

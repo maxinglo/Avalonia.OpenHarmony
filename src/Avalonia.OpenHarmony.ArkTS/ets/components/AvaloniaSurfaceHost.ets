@@ -107,6 +107,14 @@ class SurfaceController extends XComponentController {
       default:
         return;
     }
+    const modifiers = this.pointerModifiers(event) & 15;
+    if (event.sourceTool === SourceTool.Pen) {
+      for (const point of event.changedTouches) {
+        bridge.touch(this.surfaceId, point.id, phase, point.x * this.scale, point.y * this.scale,
+          true, modifiers, event.pressure, event.tiltX, event.tiltY);
+      }
+      return;
+    }
     for (const point of event.changedTouches) {
       const contact = this.textDragSource?.contact(point.id, phase) ?? point.id;
       const x = point.x * this.scale;
@@ -114,7 +122,7 @@ class SurfaceController extends XComponentController {
       if (phase === 0) {
         this.movingTouches.delete(point.id);
         if (this.windowKey === 0) {
-          const route = handleStageTitleBarPress(this.surfaceId, false, contact, x, y, 0, this.scale);
+          const route = handleStageTitleBarPress(this.surfaceId, false, contact, x, y, modifiers, this.scale);
           if (route === 2) {
             this.movingTouches.add(point.id);
             this.textDragSource?.contact(point.id, 3);
@@ -125,7 +133,7 @@ class SurfaceController extends XComponentController {
         }
       }
       if (!this.movingTouches.has(point.id)) {
-        bridge.touch(this.surfaceId, contact, phase, x, y);
+        bridge.touch(this.surfaceId, contact, phase, x, y, false, modifiers, 0, 0, 0);
       } else if (phase === 2 || phase === 3) {
         this.movingTouches.delete(point.id);
       }
@@ -201,12 +209,29 @@ class SurfaceController extends XComponentController {
       }
       return;
     }
-    bridge.pointer(this.surfaceId, phase, button, this.mouseX, this.mouseY, 0, 0, this.pointerModifiers(event));
+    let dragGesture = 0;
+    if (phase === 1 && button === 1 && event.source === SourceType.Mouse) {
+      dragGesture = this.textDragSource?.beginMousePress() ?? 0;
+    } else if ((this.mouseButtons & this.buttonMask(1)) === 0) {
+      this.textDragSource?.endMousePress();
+    }
+    bridge.pointer(this.surfaceId, phase, button, this.mouseX, this.mouseY, 0, 0, this.pointerModifiers(event),
+      dragGesture);
   }
 
   onHardwareHover(isHover: boolean, event: HoverEvent): void {
-    if (!isHover && this.surfaceId && event.source === SourceType.Mouse) {
+    if (!isHover && this.surfaceId && event.sourceTool === SourceTool.Pen) {
+      bridge.touch(this.surfaceId, 0, 5, 0, 0, true, 0, 0, 0, 0);
+    } else if (!isHover && this.surfaceId && event.source === SourceType.Mouse) {
+      this.textDragSource?.endMousePress();
       bridge.pointer(this.surfaceId, 3, 0, this.mouseX, this.mouseY, 0, 0, this.pointerModifiers(event));
+    }
+  }
+
+  onPenHoverMove(event: HoverEvent): void {
+    if (this.surfaceId && event.sourceTool === SourceTool.Pen && event.x !== undefined && event.y !== undefined) {
+      bridge.touch(this.surfaceId, 0, 4, event.x * this.scale, event.y * this.scale, true,
+        this.pointerModifiers(event) & 15, 0, event.tiltX, event.tiltY);
     }
   }
 
@@ -268,6 +293,7 @@ export struct AvaloniaSurfaceHost {
   private surface: SurfaceController = new SurfaceController();
   private dropReceiver: AvaloniaDropReceiver = new AvaloniaDropReceiver();
   private semantics: NodeContent = new NodeContent();
+  private dragLiftPreview: DragItemInfo | undefined;
   private accessibilityActive: boolean = false;
   private accessibilityStatus: number = -2;
   private accessibilityChanged = (enabled: boolean): void => {
@@ -281,8 +307,27 @@ export struct AvaloniaSurfaceHost {
     this.surface.readScale = (): number => this.getUIContext().vp2px(1);
     this.surface.geometryChanged = (): void => this.updateSurfaceOrigin();
     if (this.enableTextDragSource) {
+      const uiContext = this.getUIContext();
       this.surface.textDragSource = new AvaloniaTextDragSource(
-        (pointerId: number, texts: string[]): Promise<boolean> => this.startTextDrag(pointerId, texts));
+        (pointerId: number, data: unifiedDataChannel.UnifiedData, label: string): Promise<string | null> =>
+          this.startSystemDrag(pointerId, data, label),
+        (waiting: boolean, updateEvent?: () => void): void => {
+          if (!uiContext.isAvailable()) {
+            throw new Error('The drag source UI context is unavailable');
+          }
+          // Deferred DragEvent mutations require the source window's ArkUI instance.
+          uiContext.runScopedTask((): void => {
+            updateEvent?.();
+            uiContext.getDragController().notifyDragStartRequest(waiting
+              ? dragController.DragStartRequestStatus.WAITING : dragController.DragStartRequestStatus.READY);
+          });
+        });
+      try {
+        // ArkUI prepares a thumbnail before onDragStart even when the lift animation is disabled.
+        this.dragLiftPreview = AvaloniaTextDragSource.createPreview('Text');
+      } catch (_error) {
+        this.dragLiftPreview = undefined;
+      }
     }
     if (this.enableAccessibility) {
       this.accessibilityActive = accessibility.isOpenAccessibilitySync();
@@ -303,32 +348,21 @@ export struct AvaloniaSurfaceHost {
     }
   }
 
-  @Builder
-  private textDragPreview() {
-    Text('Text')
-      .height(48).width(92).textAlign(TextAlign.Center).fontColor(Color.White)
-      .backgroundColor(0x24549B).borderRadius(12)
-  }
-
-  private async startTextDrag(pointerId: number, texts: string[]): Promise<boolean> {
-    const data = new unifiedDataChannel.UnifiedData();
-    for (const text of texts) {
-      const record = new unifiedDataChannel.PlainText();
-      record.textContent = text;
-      data.addRecord(record);
-    }
+  private async startSystemDrag(pointerId: number, data: unifiedDataChannel.UnifiedData,
+    label: string): Promise<string | null> {
     const info: dragController.DragInfo = {
       pointerId,
       data
     };
     try {
-      const result = await this.getUIContext().getDragController().executeDrag((): void => this.textDragPreview(), info);
+      const preview = AvaloniaTextDragSource.createPreview(label);
+      const result = await this.getUIContext().getDragController().executeDrag(preview, info);
       const status = result.event.getResult();
-      hilog.info(0x0202, 'AvaloniaOHOS', 'System text drag result: %{public}d', status);
-      return status === DragResult.DRAG_SUCCESSFUL;
+      hilog.info(0x0202, 'AvaloniaOHOS', 'System touch drag result: %{public}d', status);
+      return AvaloniaTextDragSource.result(result.event);
     } catch (error) {
-      hilog.warn(0x0202, 'AvaloniaOHOS', 'Could not start system text drag: %{public}s', (error as Error).message);
-      return false;
+      hilog.warn(0x0202, 'AvaloniaOHOS', 'Could not start system drag: %{public}s', (error as Error).message);
+      return null;
     }
   }
 
@@ -401,9 +435,24 @@ export struct AvaloniaSurfaceHost {
           this.surface.onHardwareMouse(event);
         })
         .onHover((isHover: boolean, event: HoverEvent) => this.surface.onHardwareHover(isHover, event))
+        .onHoverMove((event: HoverEvent) => this.surface.onPenHoverMove(event))
         .onAxisEvent((event: AxisEvent) => this.surface.onHardwareAxis(event))
         .onKeyEvent((event: KeyEvent): boolean => this.surface.onHardwareKey(event))
         .onBlur(() => this.surface.onHardwareBlur())
+        .draggable(this.dragLiftPreview !== undefined)
+        .dragPreview(this.dragLiftPreview ?? {}, { onlyForLifting: true })
+        .dragPreviewOptions({}, { isLiftingDisabled: true })
+        .onDragStart((event: DragEvent): DragItemInfo => {
+          const preview = this.surface.textDragSource?.startMouseDrag(event, this.dragLiftPreview);
+          if (preview !== undefined) {
+            return preview;
+          }
+          event.setResult(DragResult.DRAG_CANCELED);
+          return this.dragLiftPreview ?? {};
+        })
+        .onDragEnd((event: DragEvent): void => {
+          this.surface.textDragSource?.finishMouseDrag(AvaloniaTextDragSource.result(event));
+        })
         .allowDrop(this.enableInboundDrop ? avaloniaDropTypes : null)
         .onDragEnter((event: DragEvent) => this.receiveDrag(0, event))
         .onDragMove((event: DragEvent) => this.receiveDrag(1, event))

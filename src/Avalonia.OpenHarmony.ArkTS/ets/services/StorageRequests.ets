@@ -1,9 +1,11 @@
-import { abilityAccessCtrl, bundleManager, common } from '@kit.AbilityKit';
+import { abilityAccessCtrl, bundleManager, common, Permissions } from '@kit.AbilityKit';
+import { uniformTypeDescriptor } from '@kit.ArkData';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
-import { fileIo, fileShare, fileUri, picker } from '@kit.CoreFileKit';
+import { Environment, fileIo, fileShare, fileUri, picker } from '@kit.CoreFileKit';
 
 const folderSelectionCapability: string = 'SystemCapability.FileManagement.UserFileService.FolderSelection';
 const folderAuthorizationCapability: string = 'SystemCapability.FileManagement.AppFileService.FolderAuthorization';
+const folderObtainCapability: string = 'SystemCapability.FileManagement.File.Environment.FolderObtain';
 
 export function supportsFolderPicker(): boolean {
   return canIUse(folderSelectionCapability);
@@ -18,13 +20,17 @@ function bookmarkSetupError(): number {
     return 801;
   }
   try {
-    const token = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION)
-      .appInfo.accessTokenId;
-    return abilityAccessCtrl.createAtManager().checkAccessTokenSync(token,
-      'ohos.permission.FILE_ACCESS_PERSIST') === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED ? 0 : 201;
+    return hasPermission('ohos.permission.FILE_ACCESS_PERSIST') ? 0 : 201;
   } catch (error) {
     return (error as BusinessError).code || 201;
   }
+}
+
+function hasPermission(permission: Permissions): boolean {
+  const token = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION)
+    .appInfo.accessTokenId;
+  return abilityAccessCtrl.createAtManager().checkAccessTokenSync(token, permission) ===
+    abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
 }
 
 interface PickerRequest {
@@ -52,6 +58,7 @@ interface StatReply {
   directory?: boolean;
   size?: number;
   modifiedSeconds?: number;
+  modifiedNanoseconds?: string;
 }
 
 interface BookmarkRequest {
@@ -70,6 +77,68 @@ type CompleteRequest = (value: string | null, fd?: number) => void;
 function target(uri: string): string {
   // A plain file:/// URI represents a local app-sandbox path. Picker URIs retain their authorities and grants.
   return uri.startsWith('file:///') ? new fileUri.FileUri(uri).path : uri;
+}
+
+async function wellKnownFolder(name: string): Promise<PickerEntry | null> {
+  if (!canIUse(folderObtainCapability)) {
+    return null;
+  }
+  let permission: Permissions;
+  let path: string;
+  switch (name) {
+    case 'desktop':
+      permission = 'ohos.permission.READ_WRITE_DESKTOP_DIRECTORY';
+      path = Environment.getUserDesktopDir();
+      break;
+    case 'documents':
+      permission = 'ohos.permission.READ_WRITE_DOCUMENTS_DIRECTORY';
+      path = Environment.getUserDocumentDir();
+      break;
+    case 'downloads':
+      permission = 'ohos.permission.READ_WRITE_DOWNLOAD_DIRECTORY';
+      path = Environment.getUserDownloadDir();
+      break;
+    default:
+      return null;
+  }
+
+  if (!hasPermission(permission) || !path.startsWith('/')) {
+    return null;
+  }
+  // The Environment API exposes the path before the user has authorized access to it.
+  const authority = path.startsWith('/storage/Users/currentUser/') ? 'docs' : '';
+  const encodedPath = path.replace(/\/+$/, '').split('/').map((segment: string): string =>
+    encodeURIComponent(segment)).join('/');
+  const uri = `file://${authority}${encodedPath}`;
+  const directory = await fileIo.open(target(uri), fileIo.OpenMode.READ_ONLY | fileIo.OpenMode.DIR |
+    fileIo.OpenMode.NOFOLLOW);
+  await fileIo.close(directory);
+  return { uri: uri, name: new fileUri.FileUri(uri).name, bookmarkable: false };
+}
+
+function resolveMimeFilters(groups: string[][]): string[][] {
+  const supportsTypes = canIUse('SystemCapability.DistributedDataManager.UDMF.Core');
+  return groups.map((group: string[]): string[] => {
+    const suffixes = new Set<string>();
+    for (const mimeType of group) {
+      const mime = mimeType.trim().toLowerCase();
+      if (mime === '*/*') {
+        suffixes.add('.*');
+      } else if (supportsTypes) {
+        try {
+          const ids = uniformTypeDescriptor.getUniformDataTypesByMIMEType(mime);
+          for (const id of ids) {
+            uniformTypeDescriptor.getTypeDescriptor(id).filenameExtensions.forEach((extension: string): void => {
+              suffixes.add(extension);
+            });
+          }
+        } catch (_error) {
+          // Unregistered types have no suffixes the document picker can use.
+        }
+      }
+    }
+    return Array.from(suffixes);
+  });
 }
 
 async function pick(context: common.UIAbilityContext, operation: string, request: PickerRequest): Promise<PickerReply> {
@@ -177,6 +246,14 @@ async function stat(uri: string): Promise<string> {
     if (info.isFile()) {
       result.size = info.size;
     }
+    try {
+      const nanoseconds = info.mtimeNs;
+      if (nanoseconds !== undefined) {
+        result.modifiedNanoseconds = nanoseconds.toString();
+      }
+    } catch (_error) {
+      // Some file providers only return the seconds timestamp.
+    }
     return JSON.stringify(result);
   } catch (error) {
     return fileError(error as BusinessError);
@@ -229,6 +306,18 @@ async function bookmark(operation: string, request: BookmarkRequest): Promise<Bo
 export async function executeStorageRequest(context: common.UIAbilityContext, operation: string, argument: string,
   complete: CompleteRequest): Promise<void> {
   switch (operation) {
+    case 'storage.wellKnownFolder': {
+      try {
+        const folder = await wellKnownFolder(argument);
+        complete(folder === null ? null : JSON.stringify(folder));
+      } catch (_error) {
+        complete(null);
+      }
+      return;
+    }
+    case 'storage.resolveMimeFilters':
+      complete(JSON.stringify(resolveMimeFilters(JSON.parse(argument) as string[][])));
+      return;
     case 'storage.select':
     case 'storage.selectFolder':
     case 'storage.save': {

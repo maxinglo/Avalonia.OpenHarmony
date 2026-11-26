@@ -18,9 +18,21 @@ These operations use the permissions granted to the application by the picker. A
 to the file's parent or to unrelated local paths.
 
 The system controls the picker title, overwrite prompts, and recent-location preferences. The adapter maps simple
-extension globs to native filters and forwards the save filename and suggested folder. Save choices use the first
-representable extension for each Avalonia file type. The system may return a selected type for save. MIME-only
-filters, custom picker titles, a selected type for open, and well-known folder discovery are currently unavailable.
+extension globs and MIME types with suffixes in the system UTD registry. Save choices use the first representable
+extension for each Avalonia file type. Save can report the selected type via the native index. The open API has
+no selected-type index.
+[Document picker reference](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-file-picker/)
+
+Desktop, Documents and Downloads can be discovered on a device with `FolderObtain` after the host receives
+the respective public-directory grant. Without that grant the lookup returns null. The picker remains available
+with its independent selection grant. File metadata reports size and modification time with SDK nanosecond
+precision when available. API 26 exposes metadata-change time, with no equivalent creation time in this API.
+[Public directory grants](https://developer.huawei.com/consumer/en/doc/HarmonyOS-Guides/request-dir-permission/)
+· [File metadata API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-file-fs/)
+
+On the API 26 PC, Counter saved a 24-byte MIME-only plain-text fixture with the selected type and opened it via
+the MIME filter. The picker returned the file and modification time and provided no selected open type.
+On that image Counter had no persistent public-directory grants.
 
 ## Moving and deleting selected directory contents
 

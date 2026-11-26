@@ -4,7 +4,11 @@ An application can opt into a managed Avalonia `Window` for its main `WindowStag
 `AppBuilder.With(new OpenHarmonyWindowOptions())`. Its existing
 `ISingleViewApplicationLifetime.MainView` becomes the content of the stage window.
 Call `TopLevel.GetTopLevel(control)` on an attached control to get that owner. A standard
-Avalonia `Window` can call `Show(owner)` or `ShowDialog<TResult>(owner)`.
+Avalonia `Window` can call `Show(owner)` or `ShowDialog<TResult>(owner)`. API 26 can nest
+a native child below an owned window. In freeform mode, `Window.Show()` without an owner
+creates an independent auxiliary window within the same stage. The system closes it with
+the stage and groups it into the same Dock task.
+[HarmonyOS window types](https://developer.huawei.com/consumer/en/doc/HarmonyOS-Guides/window-type-overview/)
 
 The stage and its child windows have separate XComponent framebuffers, input routes, and
 HarmonyOS window IDs for the system keyboard. A child surface can detach and attach again
@@ -33,11 +37,10 @@ disables its owner's input while the dialog is open.
   for its ABI and build mode. Use the counter and move/resize commands in the modal dialog,
   then select **Return dialog result** and check the main counter remains interactive.
 
-The windowed host uses software framebuffers and supports child windows directly owned
-by the stage. Window decorations and availability depend on the device's window mode.
-A device that rejects a frame at creation can create a child with platform-default geometry.
-Standalone top levels, owners other than the stage, custom child-window move drags,
-and custom resize drags need separate support.
+The windowed host uses software framebuffers by default and can opt into EGL per XComponent.
+Window decorations and availability depend on the device's window mode. A device that
+rejects a frame at creation can create a child with platform-default geometry.
+[EGL options](integration.md#skia-egl-rendering)
 
 ## Desktop stage window state
 
@@ -57,11 +60,35 @@ managed content remain attached across a minimize or a new XComponent surface. T
 caption controls apply to the main stage in freeform window mode. Child windows continue to follow
 the dedicated child-window visibility, geometry and close APIs.
 
+The freeform stage supports programmatic position, title, decoration and size limit changes.
+`Topmost` forwards to the native setting on devices and hosts with
+`ohos.permission.WINDOW_TOPMOST`. `BeginResizeDrag` drives floating window geometry from
+an Avalonia grip using the SDK resize and move calls. System edge dragging uses its native path.
+The public window API provides no per-window Dock visibility or dynamic bitmap icon setter.
+[Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
+· [Topmost permission](https://developer.huawei.com/consumer/en/doc/HarmonyOS-Guides/permissions-for-all/#ohospermissionwindow_topmost)
+
 In the windowed Counter, the **Stage minimize**, **Stage maximize**, **Stage normal**,
 **Stage fullscreen**, **Stage resize**, and **Stage caption policy** controls issue those requests.
 Counter logs observed state, position, client and frame sizes, and both the managed and native
 window identities. `tests/LifecycleProbe` covers managed notification and surface replacement;
 the ArkTS `WindowCloseProbe` also checks desktop request routing with injected native behavior.
+
+## Popup and transparency
+
+Avalonia ComboBox and similar popups use the owner surface's overlay. The native ArkUI
+popup API takes an ArkUI builder and provides its own focus, dismissal and window scope.
+The owner overlay keeps Avalonia hit testing and focus in the same window.
+[ArkUI popup API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/ts-universal-attributes-popup/)
+
+XComponent composition reports opaque. Window background color affects the content area.
+On PC, `setWindowContainerColor` targets the main window container and fixes inactive
+opacity. API 26 `setWindowContainerModalColor` requires the restricted
+`ohos.permission.SET_WINDOW_ALPHA` permission. Subwindow shape masks use fixed window
+dimensions. These APIs cannot provide a consistent live alpha channel across the hosted
+window and its system container.
+[Window API](https://developer.huawei.com/consumer/en/doc/harmonyos-references/arkts-apis-window-window/)
+· [Restricted permissions](https://developer.huawei.com/consumer/en/doc/doccenter-capabilities/restricted-permissions/)
 
 ## Extended stage title bar
 

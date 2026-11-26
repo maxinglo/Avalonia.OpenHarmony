@@ -129,11 +129,16 @@ export class StatusBar {
       hilog.info(0x0202, 'AvaloniaOHOS', 'OpenHarmony status bar hover tip updated');
     }
     if (this.currentMenu !== state.menu) {
-      const groups = this.getMenu(state.menu);
-      await new Promise<void>((resolve, reject) => {
-        statusBarManager.updateStatusBarMenu(this.context, groups,
-          (error: BusinessError): void => error ? reject(error) : resolve());
-      });
+      const menuIcons: image.PixelMap[] = [];
+      try {
+        const groups = await this.getMenu(state.menu, menuIcons);
+        await new Promise<void>((resolve, reject) => {
+          statusBarManager.updateStatusBarMenu(this.context, groups,
+            (error: BusinessError): void => error ? reject(error) : resolve());
+        });
+      } finally {
+        await this.releaseIcons(menuIcons);
+      }
       this.currentMenu = state.menu;
       hilog.info(0x0202, 'AvaloniaOHOS', 'OpenHarmony status bar menu updated');
     }
@@ -141,11 +146,12 @@ export class StatusBar {
 
   private async add(state: TrayState, tip: string): Promise<void> {
     const icon = await this.createIcon(state.icon);
+    const menuIcons: image.PixelMap[] = [];
     try {
       const item: statusBarManager.StatusBarItem = {
         icons: { white: icon, black: icon },
         quickOperation: { title: tip, height: iconSize, abilityName: '' },
-        statusBarGroupMenu: this.getMenu(state.menu),
+        statusBarGroupMenu: await this.getMenu(state.menu, menuIcons),
         hoverTips: tip
       };
       this.subscribe();
@@ -163,6 +169,7 @@ export class StatusBar {
         this.unsubscribe();
       }
       await icon.release();
+      await this.releaseIcons(menuIcons);
     }
   }
 
@@ -179,8 +186,15 @@ export class StatusBar {
     hilog.info(0x0202, 'AvaloniaOHOS', 'OpenHarmony status bar item removed');
   }
 
-  private getMenu(json: string): statusBarManager.StatusBarGroupMenu[] {
-    return getTrayMenuGroups(json, this.context.abilityInfo.name, this.context.abilityInfo.moduleName);
+  private getMenu(json: string, icons: image.PixelMap[]): Promise<statusBarManager.StatusBarGroupMenu[]> {
+    return getTrayMenuGroups(json, this.context.abilityInfo.name, this.context.abilityInfo.moduleName,
+      (png: string): Promise<image.PixelMap> => this.createIcon(png), icons);
+  }
+
+  private async releaseIcons(icons: image.PixelMap[]): Promise<void> {
+    for (const icon of icons) {
+      await icon.release();
+    }
   }
 
   private async defaultToolTip(): Promise<string> {

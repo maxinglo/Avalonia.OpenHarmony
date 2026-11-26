@@ -46,7 +46,7 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
     public async Task<OpenFilePickerResult> OpenFilePickerWithResultAsync(FilePickerOpenOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var filters = GetFilters(options.FileTypeFilter, options.SuggestedFileType);
+        var filters = await GetFiltersAsync(options.FileTypeFilter, options.SuggestedFileType).ConfigureAwait(false);
         var reply = await PickAsync("storage.select", new(
             SuggestedStart(options), options.AllowMultiple, filters.Select(filter => filter.Text).ToArray(), null
         )).ConfigureAwait(false);
@@ -67,7 +67,7 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
     public async Task<SaveFilePickerResult> SaveFilePickerWithResultAsync(FilePickerSaveOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var filters = GetFilters(options.FileTypeChoices, options.SuggestedFileType, save: true);
+        var filters = await GetFiltersAsync(options.FileTypeChoices, options.SuggestedFileType, save: true).ConfigureAwait(false);
         var name = options.SuggestedFileName;
         var extension = options.DefaultExtension?.TrimStart('.');
         if (!string.IsNullOrWhiteSpace(name))
@@ -101,7 +101,7 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
         )).ConfigureAwait(false);
         return reply?.Entries
             .Select(entry => TryMakeFileUri(entry.Uri, out var uri)
-                ? new StorageFolder(this, uri, entry.Name, pickerDirectory: true, bookmarkable: entry.Bookmarkable)
+                ? new StorageFolder(this, uri, entry.Name, directoryGrant: true, bookmarkable: entry.Bookmarkable)
                 : null)
             .OfType<IStorageFolder>()
             .ToArray() ?? [];
@@ -119,8 +119,26 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
     public async Task<IStorageFolder?> TryGetFolderFromPathAsync(Uri folderPath) =>
         await GetItemAsync(folderPath).ConfigureAwait(false) as IStorageFolder;
 
-    public Task<IStorageFolder?> TryGetWellKnownFolderAsync(WellKnownFolder wellKnownFolder) =>
-        Task.FromResult<IStorageFolder?>(null);
+    public async Task<IStorageFolder?> TryGetWellKnownFolderAsync(WellKnownFolder wellKnownFolder)
+    {
+        var name = wellKnownFolder switch
+        {
+            WellKnownFolder.Desktop => "desktop",
+            WellKnownFolder.Documents => "documents",
+            WellKnownFolder.Downloads => "downloads",
+            _ => null
+        };
+        if (name is null)
+            return null;
+
+        var result = await _request("storage.wellKnownFolder", name).ConfigureAwait(false);
+        using var unexpectedFile = result.File;
+        return result.Value is { } value &&
+            JsonSerializer.Deserialize(value, StorageJson.Default.PickerEntry) is { } entry &&
+            TryMakeFileUri(entry.Uri, out var uri)
+            ? new StorageFolder(this, uri, entry.Name, directoryGrant: true)
+            : null;
+    }
 
     private async Task<PickerReply?> PickAsync(string operation, PickerRequest options)
     {
@@ -237,7 +255,7 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
     private static bool TryMakeFileUri(string value, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Uri? uri) =>
         Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.IsFile;
 
-    internal IStorageFile? RetainDroppedFile(string value, int descriptor, ulong length)
+    internal IStorageFile? RetainDroppedFile(string value, int descriptor, ulong length, bool writeRequested = false)
     {
         if (value.Length > 4096 || !value.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ||
             value.Any(char.IsControl) || !TryMakeFileUri(value, out var uri) ||
@@ -246,10 +264,11 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
             return null;
 
         var retained = OpenHarmonyDropFile.Retain(descriptor);
-        return retained is null ? null : new OpenHarmonyDropFile(uri, retained, length);
+        return retained is null ? null : new OpenHarmonyDropFile(uri, retained, length,
+            writeRequested && OpenHarmonyDropFile.CanWrite(retained));
     }
 
-    private static List<(string Text, FilePickerFileType Type)> GetFilters(
+    private async Task<List<(string Text, FilePickerFileType Type)>> GetFiltersAsync(
         IReadOnlyList<FilePickerFileType>? choices,
         FilePickerFileType? suggested,
         bool save = false)
@@ -258,24 +277,52 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
         if (choices is null)
             return filters;
 
-        foreach (var type in choices.OrderByDescending(type => ReferenceEquals(type, suggested)).Take(100))
+        var ordered = choices.OrderByDescending(type => ReferenceEquals(type, suggested)).Take(100).ToArray();
+        var suffixChoices = ordered.Select(type => GetSuffixes(type, save)).ToArray();
+        var mimeTypes = ordered.Select((type, index) => suffixChoices[index].Length == 0
+            ? type.MimeTypes?.Where(mime => !string.IsNullOrWhiteSpace(mime)).Take(100).ToArray() ?? []
+            : []).ToArray();
+        if (mimeTypes.Any(types => types.Length > 0))
         {
-            var suffixes = type.Patterns?
-                .Where(pattern => pattern.Length > 2 && pattern[0] == '*' && pattern[1] == '.')
-                .Select(pattern => pattern[1..])
-                .Where(IsSimpleSuffix)
-                .Where(suffix => !save || suffix != ".*")
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(save ? 1 : 100)
-                .ToArray();
-            if (suffixes is not { Length: > 0 })
+            var result = await _request("storage.resolveMimeFilters",
+                JsonSerializer.Serialize(mimeTypes, StorageJson.Default.StringArrayArray)).ConfigureAwait(false);
+            using var unexpectedFile = result.File;
+            if (result.Value is { } mapping &&
+                JsonSerializer.Deserialize(mapping, StorageJson.Default.StringArrayArray) is { } resolved &&
+                resolved.Length == ordered.Length)
+            {
+                for (var i = 0; i < suffixChoices.Length; i++)
+                {
+                    if (mimeTypes[i].Length > 0)
+                        suffixChoices[i] = FilterSuffixes(resolved[i], save);
+                }
+            }
+        }
+
+        for (var i = 0; i < ordered.Length; i++)
+        {
+            var suffixes = suffixChoices[i];
+            if (suffixes.Length == 0)
                 continue;
+            var type = ordered[i];
             var name = type.Name.Replace('|', ' ');
             var suffixFilter = string.Join(',', suffixes);
             filters.Add((name.Length == 0 ? suffixFilter : $"{name}|{suffixFilter}", type));
         }
         return filters;
     }
+
+    private static string[] GetSuffixes(FilePickerFileType type, bool save) =>
+        FilterSuffixes(type.Patterns?
+            .Where(pattern => pattern == "*" || pattern?.StartsWith("*.", StringComparison.Ordinal) == true)
+            .Select(pattern => pattern == "*" ? ".*" : pattern[1..]), save);
+
+    private static string[] FilterSuffixes(IEnumerable<string>? suffixes, bool save) =>
+        suffixes?.Where(IsSimpleSuffix)
+            .Where(suffix => !save || suffix != ".*")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(save ? 1 : 100)
+            .ToArray() ?? [];
 
     private static bool IsSimpleSuffix(string suffix) => suffix == ".*" ||
         (suffix.Length > 1 && suffix[0] == '.' &&
@@ -313,9 +360,20 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
         public async Task<StorageItemProperties> GetBasicPropertiesAsync()
         {
             var stat = await Owner.StatAsync(Path).ConfigureAwait(false);
-            return stat is null ? new() : new(stat.Size, dateModified: stat.ModifiedSeconds is { } time
-                ? DateTimeOffset.FromUnixTimeSeconds(time)
-                : null);
+            return stat is null ? new() : new(stat.Size, dateModified: GetModifiedTime(stat));
+        }
+
+        private static DateTimeOffset? GetModifiedTime(StatReply stat)
+        {
+            if (stat.ModifiedNanoseconds is { } nanoseconds &&
+                Int128.TryParse(nanoseconds, System.Globalization.CultureInfo.InvariantCulture, out var value))
+            {
+                var ticks = value / 100 + DateTimeOffset.UnixEpoch.Ticks;
+                if (ticks >= DateTimeOffset.MinValue.Ticks && ticks <= DateTimeOffset.MaxValue.Ticks)
+                    return new DateTimeOffset((long)ticks, TimeSpan.Zero);
+            }
+            return stat.ModifiedSeconds is { } seconds && seconds >= DateTimeOffset.MinValue.ToUnixTimeSeconds() &&
+                seconds <= DateTimeOffset.MaxValue.ToUnixTimeSeconds() ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null;
         }
 
         public async Task<IStorageFolder?> GetParentAsync()
@@ -384,7 +442,7 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
             if (_removed)
                 return;
             if (MutationParent is not { CanMutateChildren: true } parent)
-                throw new UnauthorizedAccessException("Deleting an item requires its containing directory's picker grant.");
+                throw new UnauthorizedAccessException("Deleting an item requires a system grant for its containing directory.");
             await Owner._mutations.WaitAsync().ConfigureAwait(false);
             try
             {
@@ -468,20 +526,20 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
     }
 
     private sealed class StorageFolder(OpenHarmonyStorageProvider owner, Uri path, string? name,
-        StorageFolder? mutationParent = null, string? entryName = null, bool pickerDirectory = false,
+        StorageFolder? mutationParent = null, string? entryName = null, bool directoryGrant = false,
         bool bookmarkable = false, BookmarkRecord? savedBookmark = null)
         : StorageItem(owner, path, name, mutationParent, entryName, bookmarkable, savedBookmark), IStorageBookmarkFolder
     {
-        public bool CanMutateChildren => !IsRemoved && (pickerDirectory || MutationParent?.CanMutateChildren == true);
+        public bool CanMutateChildren => !IsRemoved && (directoryGrant || MutationParent?.CanMutateChildren == true);
 
         public async Task<SafeFileHandle> OpenMutationDirectoryAsync()
         {
             if (IsRemoved)
                 throw new DirectoryNotFoundException("The selected HarmonyOS directory was moved or deleted.");
-            if (pickerDirectory)
+            if (directoryGrant)
                 return await Owner.OpenDescriptorAsync("storage.openMutationDirectory", Path).ConfigureAwait(false);
             if (MutationParent is null)
-                throw new UnauthorizedAccessException("This directory was not acquired from the system folder picker.");
+                throw new UnauthorizedAccessException("This directory was not acquired with a system folder grant.");
             using var parent = await MutationParent.OpenMutationDirectoryAsync().ConfigureAwait(false);
             return await Task.Run(() => StorageDirectory.OpenChildDirectory(parent, EntryName)).ConfigureAwait(false);
         }
@@ -539,13 +597,16 @@ public sealed class OpenHarmonyStorageProvider : IStorageProvider
 internal sealed record PickerRequest(string? StartUri, bool Multiple, string[] Filters, string? FileName, bool RequestBookmarks = false);
 internal sealed record PickerEntry(string Uri, string Name, bool Bookmarkable = false);
 internal sealed record PickerReply(PickerEntry[] Entries, int SelectedIndex);
-internal sealed record StatReply(int Error, string? Name, bool Directory, ulong? Size, long? ModifiedSeconds);
+internal sealed record StatReply(int Error, string? Name, bool Directory, ulong? Size, long? ModifiedSeconds,
+    string? ModifiedNanoseconds);
 internal sealed record BookmarkRecord(string Uri, FileAccess Access, bool Directory);
 internal sealed record BookmarkReply(int Error, int? PolicyError);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(PickerRequest))]
 [JsonSerializable(typeof(PickerReply))]
+[JsonSerializable(typeof(PickerEntry))]
+[JsonSerializable(typeof(string[][]))]
 [JsonSerializable(typeof(StatReply))]
 [JsonSerializable(typeof(BookmarkRecord))]
 [JsonSerializable(typeof(BookmarkReply))]

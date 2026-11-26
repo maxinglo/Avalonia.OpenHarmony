@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Avalonia.Controls;
 using Avalonia.Controls.Platform;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 
 namespace Avalonia.OpenHarmony;
@@ -92,7 +93,7 @@ internal sealed class OpenHarmonyNativeMenuExporter(Action<string> update) : INa
                     if (children.Count == 0)
                         continue;
 
-                    group.Add(new(item.Header!, Children: children));
+                    group.Add(new(item.Header!, Icon: EncodeIcon(item), Children: children));
                 }
                 else
                     group.Add(AddAction(item, root));
@@ -130,7 +131,16 @@ internal sealed class OpenHarmonyNativeMenuExporter(Action<string> update) : INa
         var code = _codes.GetValue(item, static _ => Interlocked.Increment(ref s_nextCode)
             .ToString(CultureInfo.InvariantCulture));
         _actions[code] = new(item, menu, parent);
-        return new(item.Header!, code, item.ToggleType != MenuItemToggleType.None && item.IsChecked);
+        return new(item.Header!, code, item.ToggleType != MenuItemToggleType.None && item.IsChecked, EncodeIcon(item));
+    }
+
+    private static string? EncodeIcon(NativeMenuItem item)
+    {
+        if (item.Icon is not { } icon)
+            return null;
+        using var stream = new MemoryStream();
+        icon.Save(stream, PngBitmapEncoderOptions.Default);
+        return Convert.ToBase64String(stream.GetBuffer().AsSpan(0, checked((int)stream.Length)));
     }
 
     private static bool CanShow(NativeMenuItem item) => item.IsVisible && item.IsEnabled &&
@@ -165,7 +175,8 @@ internal sealed class OpenHarmonyNativeMenuExporter(Action<string> update) : INa
     {
         if (args.Property == NativeMenuItem.HeaderProperty || args.Property == NativeMenuItem.IsEnabledProperty ||
             args.Property == NativeMenuItem.IsVisibleProperty || args.Property == NativeMenuItem.MenuProperty ||
-            args.Property == NativeMenuItem.ToggleTypeProperty || args.Property == NativeMenuItem.IsCheckedProperty)
+            args.Property == NativeMenuItem.ToggleTypeProperty || args.Property == NativeMenuItem.IsCheckedProperty ||
+            args.Property == NativeMenuItem.IconProperty)
             QueueUpdate();
     }
 
@@ -181,7 +192,7 @@ internal sealed class OpenHarmonyNativeMenuExporter(Action<string> update) : INa
     private sealed record MenuAction(NativeMenuItem Item, NativeMenu Menu, NativeMenuItem? Parent);
 }
 
-internal sealed record OpenHarmonyNativeMenuEntry(string Title, string? Code = null, bool Selected = false,
+internal sealed record OpenHarmonyNativeMenuEntry(string Title, string? Code = null, bool Selected = false, string? Icon = null,
     List<OpenHarmonyNativeMenuEntry>? Children = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

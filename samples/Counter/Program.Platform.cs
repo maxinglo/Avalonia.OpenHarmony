@@ -9,6 +9,15 @@ namespace Counter;
 public static partial class Program
 {
     private static PlatformThemeVariant _initialTheme = PlatformThemeVariant.Light;
+    private static uint? _initialAccent;
+
+    [UnmanagedCallersOnly(EntryPoint = "avaoh_set_accent")]
+    public static void SetAccent(uint argb)
+    {
+        _initialAccent = argb;
+        if (Host.IsValueCreated)
+            Host.Value.SetAccent(argb);
+    }
 
     [UnmanagedCallersOnly(EntryPoint = "avaoh_set_lifecycle")]
     public static void SetLifecycle(int transition) =>

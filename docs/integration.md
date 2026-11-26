@@ -130,10 +130,10 @@ Use the optional windowed stage to show native Avalonia child windows and modal 
 
 The software framebuffer is the default. An application can opt in to the Skia OpenGL ES renderer
 by adding `With(new OpenHarmonyRenderingOptions { UseEgl = true })` to its `AppBuilder`.
-The host checks that Skia can draw into the live XComponent window before starting the GPU
-compositor. EGL initialization or rendering errors return the affected top level to software.
+This works with the embedded view, windowed stage and native owned windows. Each windowed route
+binds its current XComponent, and a route-specific EGL failure returns that route to software while
+retaining its Avalonia window. A new surface can retry EGL.
 
-Run `scripts/Build-Counter.ps1` with `-UseEgl` to enable the same request. The package is placed in the
-`egl` subdirectory of the chosen ABI and build mode.
-On HarmonyOS, the first compositor frame on each EGL surface produces a
-`Presented Avalonia EGL frame` entry under the `AvaloniaOHOS` log tag.
+Run `scripts/Build-Counter.ps1` with `-UseEgl` or `-Windowed -UseEgl` to enable the same request.
+The package is placed in the `egl` or `windowed/egl` subdirectory. On HarmonyOS, a
+`Presented Avalonia EGL frame` entry includes the surface token under the `AvaloniaOHOS` log tag.

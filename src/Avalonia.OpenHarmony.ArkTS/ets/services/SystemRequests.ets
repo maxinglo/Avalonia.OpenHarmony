@@ -21,8 +21,8 @@ export function registerSystemRequests(context: common.UIAbilityContext, mainWin
     let request: Promise<void>;
     if (operation.startsWith('storage.')) {
       request = executeStorageRequest(context, operation, argument, finish);
-    } else if (operation === 'drag.text' || operation === 'drag.texts') {
-      request = AvaloniaTextDragSource.execute(argument, operation === 'drag.texts')
+    } else if (operation === 'drag.text' || operation === 'drag.texts' || operation === 'drag.data') {
+      request = AvaloniaTextDragSource.execute(operation, argument)
         .then((value: string | null): void => finish(value));
     } else if (operation === 'window.child' && children !== undefined) {
       request = children.execute(argument).then((value: string | null): void => finish(value));
@@ -51,21 +51,39 @@ async function executeLauncherRequest(context: common.UIAbilityContext, operatio
     await context.openLink(argument, { appLinkingOnly: false });
     return '';
   }
+  if (operation === 'launcher.mailto') {
+    await context.startAbility({ action: wantConstant.Action.ACTION_SEND_TO_DATA, uri: argument });
+    return '';
+  }
 
-  if (operation !== 'launcher.file' && operation !== 'launcher.path') {
+  const folder = operation === 'launcher.folder';
+  if (!folder && operation !== 'launcher.file' && operation !== 'launcher.path') {
     return null;
   }
 
-  const uri = operation === 'launcher.path' ? fileUri.getUriFromPath(argument) : argument;
-  const name = uri.substring(uri.lastIndexOf('/') + 1);
-  const extension = name.lastIndexOf('.');
+  let uri = argument;
+  if (operation === 'launcher.path') {
+    uri = fileUri.getUriFromPath(argument);
+  } else if (folder && argument.startsWith('file:///')) {
+    uri = fileUri.getUriFromPath(new fileUri.FileUri(argument).path);
+  }
   const want: Want = {
     action: 'ohos.want.action.viewData',
     uri: uri,
     flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION
   };
-  if (extension > 0) {
-    want.type = uniformTypeDescriptor.getUniformDataTypeByFilenameExtension(name.substring(extension));
+  if (folder) {
+    want.type = uniformTypeDescriptor.UniformDataType.FOLDER;
+  } else {
+    const name = new fileUri.FileUri(uri).name;
+    const extension = name.lastIndexOf('.');
+    if (extension > 0) {
+      try {
+        want.type = uniformTypeDescriptor.getUniformDataTypeByFilenameExtension(name.substring(extension));
+      } catch (_error) {
+        // The system can infer the type from the URI suffix.
+      }
+    }
   }
   await context.startAbility(want);
   return '';
